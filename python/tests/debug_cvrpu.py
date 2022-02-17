@@ -12,7 +12,7 @@ if __name__ == '__main__':
     calc_time = datetime.now()
     trqs = []
 
-    with open('../../data/cvrpu_0.json') as f:
+    with open('../../data/cvrp_1.json') as f:
         data = json.load(f)
 
     depot = data['depot']

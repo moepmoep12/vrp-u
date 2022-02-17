@@ -11,7 +11,7 @@ if __name__ == '__main__':
     calc_time = datetime.now()
     trqs = []
 
-    with open('../../data/vrpdpu_0.json') as f:
+    with open('../../data/vrpdp_0.json') as f:
         data = json.load(f)
 
     depot = data['depot']

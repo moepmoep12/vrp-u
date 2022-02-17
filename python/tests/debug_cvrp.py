@@ -1,5 +1,10 @@
 from vrpu.core import *
 from vrpu.solver.or_tools.or_tools_solver import SolverCVRP
+
+from vrpu.solver.local.neighborhood import CompleteNeighborhood
+from vrpu.solver.local.objective import DistanceObjective
+from vrpu.solver.local.local_solver import InitSolverCVRP, LocalSolver
+
 from vrpu.core.graph.search.node_distance import NodeDistanceAStar
 from vrpu.core.util.solution_printer import DataFramePrinter
 from vrpu.core.util.visualization import show_solution
@@ -11,7 +16,7 @@ if __name__ == '__main__':
     calc_time = datetime.now()
     trqs = []
 
-    with open('../../data/cvrp_1.json') as f:
+    with open('../../data/cvrp_0.json') as f:
         data = json.load(f)
 
     depot = data['depot']
@@ -30,8 +35,11 @@ if __name__ == '__main__':
                          pick_duration=timedelta(seconds=0),
                          delivery_duration=timedelta(seconds=0), vehicle_velocity=1)
 
-    solver = SolverCVRP(NodeDistanceAStar(), graph=graph, open_vrp=False)
-    solution = solver.solve(problem)
+    # solver = SolverCVRP(NodeDistanceAStar(), graph=graph, open_vrp=False)
+    # solution = solver.solve(problem)
+
+    solver = LocalSolver(CompleteNeighborhood(), DistanceObjective(), InitSolverCVRP(NodeDistanceAStar(), graph=graph))
+    solver.solve(problem)
 
     printer = DataFramePrinter(only_node_actions=True)
     printer.print_solution(solution)
