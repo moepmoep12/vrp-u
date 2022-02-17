@@ -1,17 +1,17 @@
 import json
 import random
-from abc import ABC, abstractmethod
-from dataclasses import dataclass
 from datetime import datetime, timedelta
+from operator import itemgetter
 from typing import List, Tuple, Dict
 from overrides import overrides
 from deap import creator, base, tools
 
 from vrpu.core import VRPProblem, Solution, TransportRequest, Vehicle, Graph, PickUp, Delivery, Tour, Action, \
-    SetupAction, DriveAction, VisitAction, NodeAction
+    SetupAction, DriveAction, VisitAction, NodeAction, UTurnGraph, UTurnTransitionFunction, DeliveryUTurnState, \
+    PickUpUTurnState
 from vrpu.core.graph.search.node_distance import NodeDistanceAStar, CachedNodeDistance
 from vrpu.core.util.solution_printer import DataFramePrinter
-from vrpu.core.util.visualization import show_solution
+from vrpu.core.util.visualization import show_uturn_solution
 from vrpu.solver.solver import ISolver
 
 FITNESS_FCT_NAME = 'FitnessMax'
@@ -21,40 +21,6 @@ EVALUATION_FCT_NAME = 'Evaluation'
 SELECTION_FCT_NAME = 'Selection'
 RECOMBINE_FCT_NAME = 'Recombine'
 MUTATE_FCT_NAME = 'Mutate'
-
-
-@dataclass
-class InsertionPosition:
-    pickup_pos: int
-    delivery_pos: int
-
-    def insert(self, actions: List[Action], pickup: PickUp, delivery: Delivery):
-        actions.insert(self.delivery_pos, delivery)
-        actions.insert(self.pickup_pos, pickup)
-
-
-class IInsertionPositions(ABC):
-
-    @abstractmethod
-    def calc_possible_insertion_positions(self, trq: TransportRequest, actions: List[Action]) \
-            -> List[InsertionPosition]:
-        pass
-
-
-class InsertionPositionsAll(IInsertionPositions):
-
-    @overrides
-    def calc_possible_insertion_positions(self, trq: TransportRequest, actions: List[Action]) \
-            -> List[InsertionPosition]:
-        results = []
-        range_pick_up = (0, len(actions))
-        range_delivery = (0, len(actions))
-
-        for p in range(range_pick_up[0], range_pick_up[1] + 1):
-            for d in range(max(p, range_delivery[0]), range_delivery[1] + 1):
-                results.append(InsertionPosition(p, d))
-
-        return results
 
 
 class GASolverCVRP(ISolver):
@@ -75,11 +41,7 @@ class GASolverCVRP(ISolver):
 
         self._actions = self._create_actions()
 
-        # Setup node distance function
-        nodes = [a.node for a in self._actions]
-        nodes.extend([v.current_node for v in self._current_problem.vehicles])
-        nodes = set(nodes)
-        self._node_distance.calculate_distances(self._graph, nodes)
+        self._setup_node_distance_function()
 
         # create classes in DEAP
         creator.create(FITNESS_FCT_NAME, base.Fitness, weights=(1.0, -1.0))
@@ -140,8 +102,8 @@ class GASolverCVRP(ISolver):
             for ind, fit in zip(invalid_ind, fitnesses):
                 ind.fitness.values = fit
 
-            # # The population is entirely replaced by the offspring
-            population[:] = children
+            # The population is entirely replaced by the offspring
+            population[:] = random.sample(children, len(children))
 
             best_ind = tools.selBest(population, 1)[0]
             print(f"\r   Generation {generation + 1}/{self.generations}"
@@ -151,6 +113,15 @@ class GASolverCVRP(ISolver):
 
         best_ind = tools.selBest(population, 1)[0]
         return self._individual_to_solution(best_ind)
+
+    def _setup_node_distance_function(self):
+        """
+        Sets up the node distance function to pre-calculate needed distances.
+        """
+        nodes = [a.node for a in self._actions]
+        nodes.extend([v.current_node for v in self._current_problem.vehicles])
+        nodes = set(nodes)
+        self._node_distance.calculate_distances(self._graph, nodes)
 
     def _create_actions(self):
         """
@@ -170,7 +141,7 @@ class GASolverCVRP(ISolver):
         load = 0
         # trqs = random.sample(self._current_problem.transport_requests, len(self._current_problem.transport_requests))
 
-        for i, delivery in enumerate(self._actions):
+        for i in range(len(self._actions)):
             vehicle = self._current_problem.vehicles[vehicle_index]
             value = self._generate_value(existing_values=[key[1] for key in keys], min_val=1, max_val=999)
             keys.append((vehicle_index, value))
@@ -202,7 +173,7 @@ class GASolverCVRP(ISolver):
         total_distance = sum([t.get_distance() for t in solution.tours])
         return 1.0 / total_distance, total_distance
 
-    def _recombine(self, child1: List[Tuple[int, int]], child2: List[Tuple[int, int]]):
+    def _recombine(self, child1: [], child2: []):
         """
         :param child1: First child.
         :param child2: Second child.
@@ -211,7 +182,22 @@ class GASolverCVRP(ISolver):
         self._two_point_crossover(child1, child2)
         return child1, child2
 
-    def _two_point_crossover(self, ind1: List[Tuple[int, int]], ind2: List[Tuple[int, int]]):
+    def _uniform_crossover(self, ind1: [], ind2: []) -> bool:
+
+        performed_crossover = False
+
+        for i in range(len(ind1)):
+            if random.random() >= 0.5:
+                self._swap_values(ind1, ind2, i, i)
+                performed_crossover = True
+
+        return performed_crossover
+
+    def _one_point_crossover(self, ind1: [], ind2: []) -> bool:
+        from_index = random.randint(0, len(ind1) - 1)
+        return self._swap_values(ind1, ind2, from_index, len(ind1) - 1)
+
+    def _two_point_crossover(self, ind1: [], ind2: []) -> bool:
         """
         :param ind1: First individual.
         :param ind2: Second individual.
@@ -225,7 +211,7 @@ class GASolverCVRP(ISolver):
 
         return self._swap_values(ind1, ind2, from_index, to_index)
 
-    def _mutate(self, individual: List[Tuple[int, int]]):
+    def _mutate(self, individual: []):
         """
         :param individual: The individual to mutate.
         :return: Mutates the individual by assigned a random action to another vehicle.
@@ -267,8 +253,7 @@ class GASolverCVRP(ISolver):
         else:
             return -1
 
-    def _swap_values(self, ind1: List[Tuple[int, int]], ind2: List[Tuple[int, int]], from_index: int,
-                     to_index: int) -> bool:
+    def _swap_values(self, ind1: [], ind2: [], from_index: int, to_index: int) -> bool:
         """
         Swaps the values in the given range in place.
         :param ind1: First individual.
@@ -285,7 +270,7 @@ class GASolverCVRP(ISolver):
 
         return swapped
 
-    def _individual_to_actions(self, individual: [Tuple[int, int]]) -> Dict[int, List[NodeAction]]:
+    def _individual_to_actions(self, individual: []) -> Dict[int, List[NodeAction]]:
         """
         Transforms an individual to a dict containing the ordered list of actions assigned to each vehicle.
         :param individual: The individual to transform.
@@ -303,7 +288,7 @@ class GASolverCVRP(ISolver):
 
         return actions
 
-    def _individual_to_solution(self, individual: List[Tuple[int, int]]) -> Solution:
+    def _individual_to_solution(self, individual: []) -> Solution:
         """
         Transforms an individual to a Solution.
         :param individual: The individual to transform.
@@ -320,19 +305,19 @@ class GASolverCVRP(ISolver):
             tours.append(tour)
         return Solution(tours)
 
-    def _actions_to_tour(self, actions: List[NodeAction], vehicle: Vehicle) -> Tour:
+    def _actions_to_tour(self, actions: [NodeAction], vehicle: Vehicle) -> Tour:
         """
         :param actions: List of actions assigned to the vehicle.
         :param vehicle: The vehicle for the tour.
         :return: A tour containing all actions.
         """
         setup_time = 0
-        end_time = vehicle.available_from + timedelta(seconds=setup_time)
         tour_actions = []
         offset = timedelta(seconds=setup_time)
-        node_actions = [SetupAction(start_node=vehicle.current_node, duration=timedelta(seconds=setup_time)),
-                        *actions,
-                        VisitAction(node=vehicle.current_node, duration=timedelta(seconds=setup_time))]
+        node_actions = [
+            SetupAction(start_node=self._get_start_node_for_vehicle(vehicle), duration=timedelta(seconds=setup_time)),
+            *actions,
+            VisitAction(node=self._get_start_node_for_vehicle(vehicle), duration=timedelta(seconds=setup_time))]
 
         for i in range(1, len(node_actions)):
             from_node = node_actions[i - 1].node
@@ -359,36 +344,170 @@ class GASolverCVRP(ISolver):
         return Tour(uid=vehicle.uid, actions=tour_actions, assigned_vehicle=vehicle, start_time=vehicle.available_from,
                     end_time=end_time)
 
+    def _get_start_node_for_vehicle(self, vehicle: Vehicle):
+        return vehicle.current_node
+
 
 class GASolverVRPDP(GASolverCVRP):
-    pass
+    @overrides
+    def _create_actions(self):
+        """
+        :return: All actions for the current problem.
+        """
+        actions = []
 
-    # @overrides
-    # def _init_individual(self, ind, n):
-    #     actions = []
-    #     pick_duration = timedelta(seconds=self._current_problem.pick_duration.total_seconds())
-    #     delivery_duration = timedelta(seconds=self._current_problem.delivery_duration.total_seconds())
-    #
-    #     trqs = random.sample(self._current_problem.transport_requests, len(self._current_problem.transport_requests))
-    #
-    #     for trq in trqs:
-    #         insertion_positions = InsertionPositionsAll().calc_possible_insertion_positions(trq, actions)
-    #         insertion_pos = random.choice(insertion_positions)
-    #         insertion_pos.insert(actions, PickUp(trq, pick_duration), Delivery(trq, delivery_duration))
-    #
-    #     return actions
+        for trq in self._current_problem.transport_requests:
+            actions.append(PickUp(trq, self._current_problem.pick_duration))
+            actions.append(Delivery(trq, self._current_problem.delivery_duration))
+
+        return actions
 
     @overrides
     def _init_individual(self):
         keys = []
         vehicle_index = 0
-        load = 0
-        trqs = random.sample(self._current_problem.transport_requests, len(self._current_problem.transport_requests))
 
-        for i, trq in enumerate(trqs):
+        for i in range(len(self._current_problem.transport_requests)):
             vehicle = self._current_problem.vehicles[vehicle_index]
-            value = self._generate_value([key[1] for key in keys], 1, 999)
-            keys.append((vehicle_index, value))
+            pick_value = self._generate_value([key[1] for key in keys], 1, 800)
+            keys.append((vehicle_index, pick_value))
+            delivery_value = self._generate_value([key[1] for key in keys], pick_value + 1, 999)
+            keys.append((vehicle_index, delivery_value))
+
+            max_loads = self._get_max_load(keys)
+            if max_loads[vehicle_index] == vehicle.max_capacity:
+                vehicle_index += 1
+
+        return keys
+
+    def _get_max_load(self, individual):
+        loads = {}
+        [loads.setdefault(v, 0) for v in range(len(self._current_problem.vehicles))]
+        loads_max = {}
+        [loads_max.setdefault(v, 0) for v in range(len(self._current_problem.vehicles))]
+
+        actions = self._individual_to_actions(individual)
+
+        for vehicle_idx, action_list in actions.items():
+            for action in action_list:
+                if isinstance(action, PickUp):
+                    loads[vehicle_idx] += 1
+                    loads_max[vehicle_idx] = max(loads[vehicle_idx], loads_max[vehicle_idx])
+                if isinstance(action, Delivery):
+                    loads[vehicle_idx] -= 1
+
+        return loads_max
+
+    def _mutate(self, individual: List[Tuple[int, int]]):
+        """
+        :param individual: The individual to mutate.
+        :return: Mutates the individual by assigned a random action to another vehicle.
+        """
+
+        loads = self._get_max_load(individual)
+
+        # choose a random transport request that will be assigned to another vehicle
+        # first choose a pickup action for that trq
+        i = random.choice([n for n in range(len(individual)) if n % 2 == 0])
+
+        vehicle_idx = individual[i][0]
+        new_vehicle = self._choose_vehicle(vehicle_idx, loads)
+
+        # there might no vehicle available because they all have reached max capacity
+        if new_vehicle >= 0:
+            individual[i] = (new_vehicle, individual[i][1])
+            individual[i + 1] = (new_vehicle, individual[i + 1][1])
+
+            # check feasibility
+            loads = self._get_max_load(individual)
+            if loads[new_vehicle] > self._current_problem.vehicles[new_vehicle].max_capacity:
+                # revert
+                individual[i] = vehicle_idx, individual[i][1]
+                individual[i + 1] = (new_vehicle, individual[i + 1][1])
+
+        return individual
+
+    def _two_point_crossover(self, ind1: [], ind2: []) -> bool:
+        """
+        :param ind1: First individual.
+        :param ind2: Second individual.
+        :return: Whether crossover was performed.
+        """
+        from_index = random.choice([n for n in range(len(ind1)) if n % 2 == 0])
+        to_index = random.choice([n for n in range(len(ind1)) if n % 2 == 1])
+
+        if from_index > to_index:
+            return False
+
+        self._swap_values(ind1, ind2, from_index, to_index)
+
+        # check feasibility
+        max_load_ind1 = self._get_max_load(ind1)
+        for vehicle_index, max_load in max_load_ind1.items():
+            if max_load > self._current_problem.vehicles[vehicle_index].max_capacity:
+                self._swap_values(ind1, ind2, from_index, to_index)
+                return False
+
+        max_load_ind2 = self._get_max_load(ind2)
+        for vehicle_index, max_load in max_load_ind2.items():
+            if max_load > self._current_problem.vehicles[vehicle_index].max_capacity:
+                self._swap_values(ind1, ind2, from_index, to_index)
+                return False
+
+        return True
+
+
+class GASolverCVRPU(GASolverCVRP):
+
+    @overrides
+    def _setup_node_distance_function(self):
+        """
+        Sets up the node distance function to pre-calculate needed distances.
+        """
+        node_sets = [[a.node for a in a_list] for a_list in self._actions]
+        nodes = []
+        for node_set in node_sets:
+            nodes.extend(node_set)
+        nodes.extend([self._get_start_node_for_vehicle(v) for v in self._current_problem.vehicles])
+        nodes = set(nodes)
+        self._node_distance.calculate_distances(self._graph, nodes)
+
+    def _create_actions(self) -> [[DeliveryUTurnState]]:
+        """
+        :return: All actions for the current problem.
+        Every Delivery can be executed with one of many DeliveryUTurnStates.
+        """
+        actions = []
+
+        for i, trq in enumerate(self._current_problem.transport_requests):
+            actions.append(
+                [DeliveryUTurnState(trq, i, node_state, self._current_problem.delivery_duration)
+                 for node_state in self._get_possible_state_nodes(trq.to_node)])
+
+        return actions
+
+    def _init_individual(self) -> [[int, int, [int]]]:
+        """
+        :return: An initial individual consisting of a list of tuples indicating for every action to which
+        vehicle it belongs and its value.
+        """
+        keys = []
+        vehicle_index = 0
+        load = 0
+
+        for i in range(len(self._actions)):
+            vehicle = self._current_problem.vehicles[vehicle_index]
+            # calculate a value for the order of the delivery
+            value = self._generate_value(existing_values=[key[1] for key in keys], min_val=1, max_val=999)
+
+            # calculate a value for every possible Delivery-Spot
+            inner_keys = []
+            for _ in range(len(self._actions[i])):
+                inner_keys.append(self._generate_value(existing_values=inner_keys, min_val=1, max_val=999))
+
+            keys.append((vehicle_index, value, inner_keys))
+
+            # keep track of vehicle capacity
             load += 1
             if load >= vehicle.max_capacity:
                 load = 0
@@ -396,11 +515,298 @@ class GASolverVRPDP(GASolverCVRP):
 
         return keys
 
+    def _generate_value(self, existing_values: [int], min_val: int, max_val: int) -> int:
+        """
+        :param existing_values: Unwanted values.
+        :param min_val: Minimum value.
+        :param max_val: Maximum value.
+        :return: Returns a random value between min_val and max_val excluding elements in existing_values.
+        """
+        value = int(random.uniform(min_val, max_val))
+        if value in existing_values:
+            return self._generate_value(existing_values, min_val, max_val)
+        return value
+
+    def _get_possible_state_nodes(self, current_node: str):
+        """
+        Returns possible states for a specific node.
+        :param current_node: UID of a node.
+        :return: All possible UTurn-States for this node.
+        """
+        result = []
+
+        for uid, node in self._graph.nodes.items():
+            if node.data.current_node == current_node:
+                result.append(uid)
+
+        return result
+
+    def _individual_to_actions(self, individual: []) -> Dict[int, List[NodeAction]]:
+        """
+        Transforms an individual to a dict containing the ordered list of actions assigned to each vehicle.
+        :param individual: The individual to transform.
+        :return: A dict containing the ordered list of actions assigned to each vehicle.
+        """
+        actions = dict()
+        [actions.setdefault(i, []) for i in range(len(self._current_problem.vehicles))]
+
+        for action_index, (vehicle_index, value, action_values) in enumerate(individual):
+            index, _ = max(enumerate(action_values), key=itemgetter(1))
+            actions[vehicle_index].append((self._actions[action_index][index], value))
+
+        # sort actions for each vehicle according to their value
+        for vehicle_index, action_list in actions.items():
+            actions[vehicle_index] = [a[0] for a in sorted(action_list, key=lambda x: x[1])]
+
+        return actions
+
+    @overrides
+    def _get_start_node_for_vehicle(self, vehicle: Vehicle):
+        if vehicle.node_arriving_from:
+            for uid, node in self._graph.nodes.items():
+                if node.data.current_node == vehicle.current_node \
+                        and node.data.prev_node == vehicle.node_arriving_from:
+                    return uid
+
+        else:
+            # free choice
+            return self._get_possible_state_nodes(vehicle.current_node)[0]
+
+    def _two_point_crossover(self, ind1: [], ind2: []) -> bool:
+        """
+        :param ind1: First individual.
+        :param ind2: Second individual.
+        :return: Whether crossover was performed.
+        """
+        from_index = random.randint(0, len(ind1) - 1)
+        to_index = random.randint(0, len(ind2) - 1)
+
+        if from_index > to_index:
+            from_index, to_index = to_index, from_index
+
+        return self._swap_values(ind1, ind2, from_index, to_index)
+
+    def _mutate(self, individual: []):
+        """
+        :param individual: The individual to mutate.
+        :return: Mutates the individual by assigned a random action to another vehicle.
+        """
+        loads = {}
+        [loads.setdefault(v, 0) for v in range(len(self._current_problem.vehicles))]
+
+        for vehicle_idx, value, _ in individual:
+            loads[vehicle_idx] += 1
+
+        # choose a random transport request that will be assigned to another vehicle
+        i = random.choice(range(len(individual)))
+
+        vehicle_idx = individual[i][0]
+        new_vehicle = self._choose_vehicle(vehicle_idx, loads)
+
+        # there might no vehicle available because they all have reached max capacity
+        if new_vehicle >= 0:
+            individual[i] = new_vehicle, individual[i][1], random.sample(individual[i][2], len(individual[i][2]))
+            loads[vehicle_idx] -= 1
+            loads[new_vehicle] += 1
+        else:
+            # no vehicle available -> do some shuffling
+            individual[i] = vehicle_idx, individual[i][1], random.sample(individual[i][2], len(individual[i][2]))
+
+        return individual
+
+
+class GASolverVRPDPU(GASolverCVRPU):
+
+    def _create_actions(self) -> [[]]:
+        """
+        :return: All actions for the current problem.
+        Every Delivery can be executed with one of many DeliveryUTurnStates.
+        """
+        actions = []
+
+        for i, trq in enumerate(self._current_problem.transport_requests):
+            actions.append(
+                [PickUpUTurnState(trq, i, node_state, self._current_problem.pick_duration)
+                 for node_state in self._get_possible_state_nodes(trq.from_node)])
+            actions.append(
+                [DeliveryUTurnState(trq, i, node_state, self._current_problem.delivery_duration)
+                 for node_state in self._get_possible_state_nodes(trq.to_node)])
+
+        return actions
+
+    def _init_individual(self) -> [[int, int, [int]]]:
+        """
+        :return: An initial individual consisting of a list of tuples indicating for every action to which
+        vehicle it belongs and its value.
+        """
+        keys = []
+        vehicle_index = 0
+
+        for i in range(len(self._current_problem.transport_requests)):
+            vehicle = self._current_problem.vehicles[vehicle_index]
+            # calculate a value for the order of the delivery
+            pick_value = self._generate_value(existing_values=[key[1] for key in keys], min_val=1, max_val=800)
+
+            # calculate a value for every possible Pickup-Spot
+            inner_keys = []
+            for _ in range(len(self._actions[i * 2])):
+                inner_keys.append(self._generate_value(existing_values=inner_keys, min_val=1, max_val=999))
+
+            keys.append((vehicle_index, pick_value, inner_keys))
+
+            delivery_value = self._generate_value([key[1] for key in keys], pick_value + 1, 999)
+            # calculate a value for every possible Delivery-Spot
+            inner_keys = []
+            for _ in range(len(self._actions[(i * 2) + 1])):
+                inner_keys.append(self._generate_value(existing_values=inner_keys, min_val=1, max_val=999))
+
+            keys.append((vehicle_index, delivery_value, inner_keys))
+
+            # keep track of vehicle capacity
+            max_loads = self._get_max_load(keys)
+            if max_loads[vehicle_index] == vehicle.max_capacity:
+                vehicle_index += 1
+
+        return keys
+
+    def _get_max_load(self, individual):
+        loads = {}
+        [loads.setdefault(v, 0) for v in range(len(self._current_problem.vehicles))]
+        loads_max = {}
+        [loads_max.setdefault(v, 0) for v in range(len(self._current_problem.vehicles))]
+
+        actions = self._individual_to_actions(individual)
+
+        for vehicle_idx, action_list in actions.items():
+            for action in action_list:
+                if isinstance(action, PickUp):
+                    loads[vehicle_idx] += 1
+                    loads_max[vehicle_idx] = max(loads[vehicle_idx], loads_max[vehicle_idx])
+                if isinstance(action, Delivery):
+                    loads[vehicle_idx] -= 1
+
+        return loads_max
+
+    def _two_point_crossover(self, ind1: [], ind2: []) -> bool:
+        """
+        :param ind1: First individual.
+        :param ind2: Second individual.
+        :return: Whether crossover was performed.
+        """
+        from_index = random.choice([n for n in range(len(ind1)) if n % 2 == 0])
+        to_index = random.choice([n for n in range(len(ind1)) if n % 2 == 1])
+
+        if from_index > to_index:
+            return False
+
+        self._swap_values(ind1, ind2, from_index, to_index)
+
+        # check feasibility
+        max_load_ind1 = self._get_max_load(ind1)
+        for vehicle_index, max_load in max_load_ind1.items():
+            if max_load > self._current_problem.vehicles[vehicle_index].max_capacity:
+                self._swap_values(ind1, ind2, from_index, to_index)
+                return False
+
+        max_load_ind2 = self._get_max_load(ind2)
+        for vehicle_index, max_load in max_load_ind2.items():
+            if max_load > self._current_problem.vehicles[vehicle_index].max_capacity:
+                self._swap_values(ind1, ind2, from_index, to_index)
+                return False
+
+        return True
+
+    def _mutate(self, individual: List[Tuple[int, int]]):
+        """
+        :param individual: The individual to mutate.
+        :return: Mutates the individual by assigned a random action to another vehicle.
+        """
+
+        loads = self._get_max_load(individual)
+
+        # choose a random transport request that will be assigned to another vehicle
+        # first choose a pickup action for that trq
+        i = random.choice([n for n in range(len(individual)) if n % 2 == 0])
+
+        vehicle_idx = individual[i][0]
+        new_vehicle = self._choose_vehicle(vehicle_idx, loads)
+
+        # there might no vehicle available because they all have reached max capacity
+        if new_vehicle >= 0:
+            individual[i] = (new_vehicle, individual[i][1], individual[i][2])
+            individual[i + 1] = (new_vehicle, individual[i + 1][1], individual[i + 1][2])
+
+            # check feasibility
+            loads = self._get_max_load(individual)
+            if loads[new_vehicle] > self._current_problem.vehicles[new_vehicle].max_capacity:
+                # revert
+                individual[i] = vehicle_idx, individual[i][1], individual[i][2]
+                individual[i + 1] = (new_vehicle, individual[i + 1][1]), individual[i + 1][2]
+
+        return individual
+
 
 if __name__ == '__main__':
     vehicles = []
     calc_time = datetime.now()
     trqs = []
+    # random.seed(13)
+
+    # with open('../../../../data/cvrp_1.json') as f:
+    #     data = json.load(f)
+    #
+    # depot = data['depot']
+    #
+    # graph = Graph.from_json(data['graph'])
+    #
+    # for i, rq in enumerate(data['requests']):
+    #     trq = TransportRequest(str(i), depot, rq['to_node'], calc_time, 1)
+    #     trqs.append(trq)
+    #
+    # for i in range(data['vehicle_count']):
+    #     v = Vehicle(str(i), depot, '', calc_time, data['max_capacity'], 1)
+    #     vehicles.append(v)
+    #
+    # problem = VRPProblem(transport_requests=trqs, vehicles=vehicles, calculation_time=calc_time,
+    #                      pick_duration=timedelta(seconds=0),
+    #                      delivery_duration=timedelta(seconds=0), vehicle_velocity=1)
+    #
+    # solver = GASolverCVRP(NodeDistanceAStar(), graph=graph, population_size=500, generations=2000, mutate_prob=0.03,
+    #                       crossover_prob=0.7)
+    # solution = solver.solve(problem)
+    #
+    # printer = DataFramePrinter(only_node_actions=True)
+    # printer.print_solution(solution)
+    #
+    # show_solution(solution, graph, True)
+
+    # with open('../../../../data/vrpdp_0.json') as f:
+    #     data = json.load(f)
+    #
+    # depot = data['depot']
+    #
+    # graph = Graph.from_json(data['graph'])
+    #
+    # for i, rq in enumerate(data['requests']):
+    #     trq = TransportRequest(str(i), rq['from_node'], rq['to_node'], calc_time, 1)
+    #     trqs.append(trq)
+    #
+    # for i in range(data['vehicle_count']):
+    #     v = Vehicle(str(i), depot, '', calc_time, data['max_capacity'], 1)
+    #     vehicles.append(v)
+    #
+    # problem = VRPProblem(transport_requests=trqs, vehicles=vehicles, calculation_time=calc_time,
+    #                      pick_duration=timedelta(seconds=0),
+    #                      delivery_duration=timedelta(seconds=0), vehicle_velocity=1)
+    #
+    # solver = GASolverVRPDP(NodeDistanceAStar(), graph=graph, population_size=1000, generations=500, mutate_prob=0.08,
+    #                        crossover_prob=0.7)
+    # solution = solver.solve(problem)
+    #
+    # printer = DataFramePrinter(only_node_actions=True)
+    # printer.print_solution(solution)
+    #
+    # show_solution(solution, graph, True)
 
     with open('../../../../data/cvrp_1.json') as f:
         data = json.load(f)
@@ -408,9 +814,10 @@ if __name__ == '__main__':
     depot = data['depot']
 
     graph = Graph.from_json(data['graph'])
+    state_graph = UTurnGraph(UTurnTransitionFunction(graph), graph)
 
     for i, rq in enumerate(data['requests']):
-        trq = TransportRequest(str(i), depot, rq['to_node'], calc_time, 1)
+        trq = TransportRequest(str(i), rq['from_node'], rq['to_node'], calc_time, 1)
         trqs.append(trq)
 
     for i in range(data['vehicle_count']):
@@ -421,11 +828,12 @@ if __name__ == '__main__':
                          pick_duration=timedelta(seconds=0),
                          delivery_duration=timedelta(seconds=0), vehicle_velocity=1)
 
-    solver = GASolverCVRP(NodeDistanceAStar(), graph=graph, population_size=100, generations=1000, mutate_prob=0.03,
-                          crossover_prob=0.7)
+    solver = GASolverCVRPU(NodeDistanceAStar(), graph=state_graph, population_size=500, generations=2000,
+                           mutate_prob=0.16,
+                           crossover_prob=0.7)
     solution = solver.solve(problem)
 
     printer = DataFramePrinter(only_node_actions=True)
     printer.print_solution(solution)
 
-    show_solution(solution, graph, True)
+    show_uturn_solution(solution, state_graph, True)
