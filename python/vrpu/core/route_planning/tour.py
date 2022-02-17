@@ -3,12 +3,13 @@ from typing import List, Dict
 from overrides import overrides
 
 from .vehicle import Vehicle
-from .actions import Action, PickUp, DriveAction
+from .actions import Action, DriveAction, Delivery, PickUp
 from .transport_request import TransportRequest
 from .serializable import Serializable
+from .clonable import Clonable
 
 
-class Tour(Serializable):
+class Tour(Serializable, Clonable):
     """
        A tour consists of an ordered list of actions. It is assigned to a single vehicle.
        """
@@ -90,7 +91,21 @@ class Tour(Serializable):
         """
         :return: All transport requests of this tour.
         """
-        return [a.trq for a in self.actions if isinstance(a, PickUp)]
+        return [a.trq for a in self.actions if isinstance(a, Delivery)]
+
+    def get_transport_requests_with_action_indices(self) -> Dict[TransportRequest, List]:
+        """
+        :return: Dict containing transport requests as keys and indices as values.
+        """
+        indices = dict.fromkeys(self.get_transport_requests(), [None] * 2)
+
+        for index, action in enumerate(self.actions):
+            if isinstance(action, PickUp):
+                indices[action.trq][0] = index
+            elif isinstance(action, Delivery):
+                indices[action.trq][1] = index
+
+        return indices
 
     def get_duration(self) -> timedelta:
         """
@@ -103,6 +118,34 @@ class Tour(Serializable):
         :return: Total distance of this tour.
         """
         return sum([a.distance for a in self.actions if isinstance(a, DriveAction)])
+
+    def get_max_load(self) -> int:
+        """
+        :return: The maximum load during this tour.
+        """
+        load = 0
+        max_load = 0
+
+        for action in self.actions:
+            if isinstance(action, PickUp):
+                load += 1
+                if load > max_load:
+                    max_load = load
+            elif isinstance(action, Delivery):
+                load -= 1
+
+        # only delivery actions
+        if load < 0:
+            max_load = -1 * load
+
+        return max_load
+
+    def clone(self):
+        return Tour(uid=self.uid,
+                    actions=[action.clone() for action in self.actions],
+                    assigned_vehicle=self.assigned_vehicle,
+                    start_time=self.start_time,
+                    end_time=self.end_time)
 
     def __repr__(self):
         val = f"Tour {self.uid} with Vehicle {self._assigned_vehicle.uid}\n" \

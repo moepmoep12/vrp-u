@@ -4,9 +4,10 @@ from overrides import overrides
 
 from .serializable import Serializable
 from .tour import Tour
+from .clonable import Clonable
 
 
-class Solution(Serializable):
+class Solution(Serializable, Clonable):
     """
     A solution consists of planned tours.
     """
@@ -17,6 +18,9 @@ class Solution(Serializable):
     @property
     def tours(self) -> List[Tour]:
         return self._tours
+
+    def clone(self):
+        return Solution([tour.clone() for tour in self.tours])
 
     @overrides
     def serialize(self) -> Dict[str, object]:

@@ -1,10 +1,11 @@
+from dataclasses import dataclass
 from typing import List
 from datetime import timedelta, datetime
 from overrides import overrides
 from ortools.constraint_solver import pywrapcp, routing_parameters_pb2, routing_enums_pb2
 
 from vrpu.core import Tour, DriveAction, VisitAction, VRPProblem, Vehicle, Action, Solution, PickUp, Delivery, \
-    NodeAction, TransportAction, TransportRequest, SetupAction
+    NodeAction, TransportAction, SetupAction, DeliveryUTurnState, PickUpUTurnState
 from vrpu.solver.solver import ISolver
 from vrpu.core.graph.search.node_distance import INodeDistance
 
@@ -14,7 +15,7 @@ DISTANCE_DIM: str = 'Distance'
 CAPACITY_DIM: str = 'Capacity'
 
 # MAX VALUES
-MAX_TOUR_DISTANCE = 300000
+MAX_TOUR_DISTANCE = 30000
 MAX_TOUR_DURATION = 1000000
 
 # WEIGHTINGS
@@ -25,8 +26,14 @@ DISTANCE_WEIGHT: int = 100
 MAX_RUN_TIME: int = 300
 
 
+@dataclass
+class SolverParams:
+    solver_method: routing_enums_pb2.LocalSearchMetaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.AUTOMATIC
+
+
 class SolverCVRP(ISolver):
-    def __init__(self, node_distance: INodeDistance, graph, open_vrp: bool = False):
+    def __init__(self, node_distance: INodeDistance, graph, open_vrp: bool = False,
+                 solver_params: SolverParams = SolverParams()):
         self._node_distance: INodeDistance = node_distance
         self._graph = graph
         self._current_problem: VRPProblem = None
@@ -37,6 +44,7 @@ class SolverCVRP(ISolver):
         self._assignment: pywrapcp.Assignment = None
         self._solution: Solution = None
         self._open_vrp = open_vrp
+        self._solver_params = solver_params
 
     @overrides
     def solve(self, problem: VRPProblem) -> Solution:
@@ -76,7 +84,7 @@ class SolverCVRP(ISolver):
         # Set max run time
         search_parameters: routing_parameters_pb2.RoutingSearchParameters = pywrapcp.DefaultRoutingSearchParameters()
         search_parameters.time_limit.seconds = MAX_RUN_TIME
-        # search_parameters.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.AUTOMATIC
+        search_parameters.local_search_metaheuristic = self.solver_params.solver_method
 
         # Initial Solution strategy
         search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PARALLEL_CHEAPEST_INSERTION
@@ -111,6 +119,10 @@ class SolverCVRP(ISolver):
         return self._assignment
 
     @property
+    def solver_params(self) -> SolverParams:
+        return self._solver_params
+
+    @property
     def vehicles(self) -> List[Vehicle]:
         return self._vehicles
 
@@ -139,8 +151,8 @@ class SolverCVRP(ISolver):
         """
         :return: All actions for the current problem.
         """
-        delivery_duration = timedelta(seconds=self._current_problem.delivery_duration.total_seconds())
-        deliveries = [Delivery(trq, delivery_duration) for trq in self._current_problem.transport_requests]
+        deliveries = [Delivery(trq, self._current_problem.delivery_duration) for trq in
+                      self._current_problem.transport_requests]
         start_actions = [SetupAction(v.current_node, timedelta(seconds=0)) for v in self.vehicles]
         visit_actions = [VisitAction(v.current_node, timedelta(seconds=0)) for v in self.vehicles]
 
@@ -360,10 +372,9 @@ class SolverVRPDP(SolverCVRP):
         """
         :return: All actions for the current problem.
         """
-        pick_duration = timedelta(seconds=self._current_problem.pick_duration.total_seconds())
-        delivery_duration = timedelta(seconds=self._current_problem.delivery_duration.total_seconds())
-        pickups = [PickUp(trq, pick_duration) for trq in self._current_problem.transport_requests]
-        deliveries = [Delivery(trq, delivery_duration) for trq in self._current_problem.transport_requests]
+        pickups = [PickUp(trq, self._current_problem.pick_duration) for trq in self._current_problem.transport_requests]
+        deliveries = [Delivery(trq, self._current_problem.delivery_duration) for trq in
+                      self._current_problem.transport_requests]
         start_actions = [SetupAction(v.current_node, timedelta(seconds=0)) for v in self.vehicles]
         visit_actions = [VisitAction(v.current_node, timedelta(seconds=0)) for v in self.vehicles]
 
@@ -402,108 +413,10 @@ class SolverVRPDP(SolverCVRP):
         return capacity
 
 
-class PickUpUTurnState(PickUp):
-    """
-    A PickUpUTurnState represents a PickUp action that is executed at a specific UTurn-State node.
-    """
+class SolverCVRPU(SolverCVRP):
 
-    def __init__(self, trq: TransportRequest, idx: int, node: str, duration: timedelta = timedelta(seconds=0),
-                 offset: timedelta = timedelta(seconds=0), ):
-        """
-        :param trq: The Transport Request that is being processed.
-        :param idx: An index that pairs this action with its corresponding delivery action.
-        :param node: The node in which the pickup is executed.
-        :param duration: The duration for the execution of this action.
-        :param offset: The offset from the tour start from which this actions execution begins.
-        """
-        PickUp.__init__(self, trq, duration, offset)
-        self._idx = idx
-        self._node = node
-
-    @property
-    def idx(self) -> int:
-        return self._idx
-
-    @idx.setter
-    def idx(self, value: int):
-        self._idx = value
-
-    @property
-    def node(self) -> str:
-        return self._node
-
-    @node.setter
-    def node(self, value: str):
-        self._node = value
-
-    @property
-    def current_node(self) -> str:
-        return self.node.split('->')[1]
-
-    @property
-    def prev_node(self) -> str:
-        return self.node.split('->')[0]
-
-    def clone(self):
-        return PickUpUTurnState(self.trq, self.idx, self.node, self.duration, self.start_offset)
-
-    def __repr__(self):
-        return super().__repr__()
-
-
-class DeliveryUTurnState(Delivery):
-    """
-    A DeliveryUTurnState represents a Delivery action that is executed at a specific UTurn-State node.
-    """
-
-    def __init__(self, trq: TransportRequest, idx: int, node: str, duration: timedelta = timedelta(seconds=0),
-                 offset: timedelta = timedelta(seconds=0), ):
-        """
-        :param trq: The Transport Request that is being processed.
-        :param idx: An index that pairs this action with its corresponding pickup action.
-        :param node: The node in which the pickup is executed.
-        :param duration: The duration for the execution of this action.
-        :param offset: The offset from the tour start from which this actions execution begins.
-        """
-        Delivery.__init__(self, trq, duration, offset)
-        self._idx = idx
-        self._node = node
-
-    @property
-    def idx(self) -> int:
-        return self._idx
-
-    @idx.setter
-    def idx(self, value: int):
-        self._idx = value
-
-    @property
-    def node(self) -> str:
-        return self._node
-
-    @node.setter
-    def node(self, value: str):
-        self._node = value
-
-    @property
-    def current_node(self) -> str:
-        return self.node.split('->')[1]
-
-    @property
-    def prev_node(self) -> str:
-        return self.node.split('->')[0]
-
-    def clone(self):
-        return DeliveryUTurnState(self.trq, self.idx, self.node, self.duration, self.start_offset)
-
-    def __repr__(self):
-        return super().__repr__()
-
-
-class SolverCVRPU(SolverVRPDP):
-
-    def __init__(self, node_distance: INodeDistance, graph):
-        super(SolverCVRPU, self).__init__(node_distance, graph, open_vrp=True)
+    def __init__(self, node_distance: INodeDistance, graph, solver_params: SolverParams = SolverParams()):
+        super(SolverCVRPU, self).__init__(node_distance, graph, open_vrp=False, solver_params=solver_params)
 
     def _get_possible_state_nodes(self, current_node: str):
         """
@@ -521,7 +434,6 @@ class SolverCVRPU(SolverVRPDP):
 
     @overrides
     def _create_actions(self):
-        delivery_duration = timedelta(seconds=self._current_problem.delivery_duration.total_seconds())
         setup_duration = timedelta(seconds=0)
         delivery_actions = []
 
@@ -530,15 +442,13 @@ class SolverCVRPU(SolverVRPDP):
 
             for j, d_loc in enumerate(delivery_locations):
                 delivery_actions.append(
-                    DeliveryUTurnState(trq=trq, idx=0, node=d_loc, duration=delivery_duration))
+                    DeliveryUTurnState(trq=trq, idx=0, node=d_loc, duration=self._current_problem.delivery_duration))
 
         start_actions = [SetupAction(start_node=self._get_start_node_for_vehicle(v), duration=setup_duration)
                          for v in self._vehicles]
         end_actions = [VisitAction(s.node, timedelta(seconds=0)) for s in start_actions]
 
-        trq_actions = sorted([*delivery_actions], key=lambda a: a.trq.due_date)
-
-        return [*trq_actions, *start_actions, *end_actions]
+        return [*delivery_actions, *start_actions, *end_actions]
 
     @overrides
     def _add_actions(self):
@@ -567,8 +477,8 @@ class SolverCVRPU(SolverVRPDP):
 
 class SolverVRPDPU(SolverVRPDP):
 
-    def __init__(self, node_distance: INodeDistance, graph):
-        super(SolverVRPDPU, self).__init__(node_distance, graph, open_vrp=True)
+    def __init__(self, node_distance: INodeDistance, graph, solver_params: SolverParams = SolverParams()):
+        super(SolverVRPDPU, self).__init__(node_distance, graph, open_vrp=False, solver_params=solver_params)
 
     def _get_possible_state_nodes(self, current_node: str):
         """
@@ -607,9 +517,7 @@ class SolverVRPDPU(SolverVRPDP):
                          for v in self._vehicles]
         end_actions = [VisitAction(s.node, timedelta(seconds=0)) for s in start_actions]
 
-        trq_actions = sorted([*pickup_actions, *delivery_actions], key=lambda a: a.trq.due_date)
-
-        return [*trq_actions, *start_actions, *end_actions]
+        return [*pickup_actions, *delivery_actions, *start_actions, *end_actions]
 
     @overrides
     def _add_actions(self):

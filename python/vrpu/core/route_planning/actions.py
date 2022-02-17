@@ -328,3 +328,101 @@ class Delivery(TransportAction):
                f" Due: {self.trq.due_date.time()} |" \
                f" +{self.start_offset.total_seconds()}s |" \
                f" {self.duration.total_seconds()}s}}"
+
+
+class PickUpUTurnState(PickUp):
+    """
+    A PickUpUTurnState represents a PickUp action that is executed at a specific UTurn-State node.
+    """
+
+    def __init__(self, trq: TransportRequest, idx: int, node: str, duration: timedelta = timedelta(seconds=0),
+                 offset: timedelta = timedelta(seconds=0), ):
+        """
+        :param trq: The Transport Request that is being processed.
+        :param idx: An index that pairs this action with its corresponding delivery action.
+        :param node: The node in which the pickup is executed.
+        :param duration: The duration for the execution of this action.
+        :param offset: The offset from the tour start from which this actions execution begins.
+        """
+        PickUp.__init__(self, trq, duration, offset)
+        self._idx = idx
+        self._node = node
+
+    @property
+    def idx(self) -> int:
+        return self._idx
+
+    @idx.setter
+    def idx(self, value: int):
+        self._idx = value
+
+    @property
+    def node(self) -> str:
+        return self._node
+
+    @node.setter
+    def node(self, value: str):
+        self._node = value
+
+    @property
+    def current_node(self) -> str:
+        return self.node.split('->')[1]
+
+    @property
+    def prev_node(self) -> str:
+        return self.node.split('->')[0]
+
+    def clone(self):
+        return PickUpUTurnState(self.trq, self.idx, self.node, self.duration, self.start_offset)
+
+    def __repr__(self):
+        return super().__repr__()
+
+
+class DeliveryUTurnState(Delivery):
+    """
+    A DeliveryUTurnState represents a Delivery action that is executed at a specific UTurn-State node.
+    """
+
+    def __init__(self, trq: TransportRequest, idx: int, node: str, duration: timedelta = timedelta(seconds=0),
+                 offset: timedelta = timedelta(seconds=0), ):
+        """
+        :param trq: The Transport Request that is being processed.
+        :param idx: An index that pairs this action with its corresponding pickup action.
+        :param node: The node in which the pickup is executed.
+        :param duration: The duration for the execution of this action.
+        :param offset: The offset from the tour start from which this actions execution begins.
+        """
+        Delivery.__init__(self, trq, duration, offset)
+        self._idx = idx
+        self._node = node
+
+    @property
+    def idx(self) -> int:
+        return self._idx
+
+    @idx.setter
+    def idx(self, value: int):
+        self._idx = value
+
+    @property
+    def node(self) -> str:
+        return self._node
+
+    @node.setter
+    def node(self, value: str):
+        self._node = value
+
+    @property
+    def current_node(self) -> str:
+        return self.node.split('->')[1]
+
+    @property
+    def prev_node(self) -> str:
+        return self.node.split('->')[0]
+
+    def clone(self):
+        return DeliveryUTurnState(self.trq, self.idx, self.node, self.duration, self.start_offset)
+
+    def __repr__(self):
+        return super().__repr__()
