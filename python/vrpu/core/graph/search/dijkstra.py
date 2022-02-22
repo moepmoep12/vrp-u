@@ -16,6 +16,7 @@ class SearchResult(object):
         self.cost = cost
         self.start_node = start_node
         self.end_node = end_node
+        self.reachable: bool = cost != float_info.max
 
     def __repr__(self):
         return f"{{ From: {self.start_node.uid} | To: {self.end_node.uid} | Cost: {self.cost:.2f} }}"

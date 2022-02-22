@@ -14,6 +14,7 @@ class Distance:
     to_node: UID = ''
     distance: int = 0
     path: List = None
+    reachable: bool = True
 
 
 MAX_DISTANCE = (sys.maxsize / 100000)
@@ -104,7 +105,8 @@ class NodeDistanceAStar(CachedNodeDistance, Generic[NodeData, EdgeData]):
                 self._distances[start_node_uid][end_node_uid] = Distance(from_node=start_node_uid,
                                                                          to_node=end_node_uid,
                                                                          distance=distance,
-                                                                         path=result.path if result else [])
+                                                                         path=result.path if result else [],
+                                                                         reachable=distance != MAX_DISTANCE)
 
     @overrides
     def get_distance(self, from_node: UID, to_node: UID) -> int:
@@ -120,7 +122,7 @@ class NodeDistanceAStar(CachedNodeDistance, Generic[NodeData, EdgeData]):
                 for _, distance in targets.items()]
 
 
-class NodeDistanceDijkstra(INodeDistance, Generic[NodeData, EdgeData]):
+class NodeDistanceDijkstra(CachedNodeDistance, Generic[NodeData, EdgeData]):
     """
        Pre-calculates the node distances for a graph with Dijkstra and caches the results.
        """
@@ -128,14 +130,18 @@ class NodeDistanceDijkstra(INodeDistance, Generic[NodeData, EdgeData]):
     def calculate_distances(self, graph: Graph[NodeData, EdgeData], node_subset: List[UID] = []):
         nodes = node_subset if node_subset else graph.nodes.keys()
 
-        for start_node_uid in nodes:
+        for i, start_node_uid in enumerate(nodes):
+            print(f"\rCalculating node distances {i + 1}/{len(nodes)}", end='')
             start_node = graph.get_node(start_node_uid)
             search_results = dijkstra.search(start_node, graph)
             relevant_results = [n for n in search_results if n.end_node.uid in nodes]
             self._distances[start_node_uid] = {r.end_node.uid: Distance(from_node=start_node_uid,
                                                                         to_node=r.end_node.uid,
                                                                         distance=int(r.cost),
-                                                                        path=[]) for r in relevant_results}
+                                                                        path=[],
+                                                                        reachable=r.reachable)
+                                               for r in relevant_results}
+        print(f"\nFinished calculating node distances!")
 
     @overrides
     def get_distance(self, from_node: UID, to_node: UID) -> int:
@@ -146,3 +152,7 @@ class NodeDistanceDijkstra(INodeDistance, Generic[NodeData, EdgeData]):
         return [distance for (_, targets) in
                 self._distances.items()
                 for _, distance in targets.items()]
+
+    @property
+    def distance_dict(self):
+        return self._distances

@@ -1,18 +1,24 @@
 import random
 from datetime import datetime
 
-from vrpu.core import TransportRequest, Graph
+from vrpu.core import TransportRequest, Graph, UTurnGraph, UTurnTransitionFunction
 from vrpu.core.graph.graph import GridGraph
+from vrpu.core.graph.search import NodeDistanceDijkstra
 
 
-def generate_grid_graph(size_x: int, size_y: int, increments: int, drop_edges: bool, drop_nodes: bool) -> Graph:
-    graph = GridGraph(size_x, size_y, increments)
+def generate_random_graph(size_x: int, size_y: int,
+                          increments_between_nodes: [int] = [10],
+                          drop_edge_prob: float = 0.0, drop_node_prob: float = 0.0,
+                          remove_unreachable_u_nodes: bool = True) -> Graph:
+    graph = GridGraph(size_x, size_y, increments_between_nodes)
 
-    if drop_nodes:
+    orig_node_count = len(graph.nodes)
+    orig_edge_count = len(graph.edges)
 
+    if drop_node_prob > 0:
         nodes_to_remove = []
         for node in graph.nodes.values():
-            if random.random() < 0.15 and len(node.neighbors) > 3:
+            if random.random() < drop_node_prob and len(node.neighbors) > 3:
                 nodes_to_remove.append(node.uid)
         for node in nodes_to_remove:
             graph.remove_node(node)
@@ -24,11 +30,11 @@ def generate_grid_graph(size_x: int, size_y: int, increments: int, drop_edges: b
         for node in nodes_to_remove:
             graph.remove_node(node)
 
-    if drop_edges:
+    if drop_edge_prob > 0:
         for node in graph.nodes.values():
             if len(node.neighbors) >= 3:
                 for neighbor in node.neighbors.keys():
-                    if random.random() < 0.08:
+                    if random.random() < drop_edge_prob:
                         graph.remove_edge(node.uid, neighbor.uid)
                         graph.remove_edge(neighbor.uid, node.uid)
                         break
@@ -40,6 +46,34 @@ def generate_grid_graph(size_x: int, size_y: int, increments: int, drop_edges: b
 
         for node in nodes_to_remove:
             graph.remove_node(node)
+
+    if remove_unreachable_u_nodes:
+        state_graph = UTurnGraph(UTurnTransitionFunction(graph), graph)
+        node_distance = NodeDistanceDijkstra(dict())
+        node_distance.calculate_distances(state_graph)
+
+        unreachable_nodes = []
+        for start_node, distance_dict in node_distance.distance_dict.items():
+            reachable = False
+            current_node = start_node
+            if '->' in start_node:
+                current_node = start_node.split('->')[1]
+
+            for to_node, distance in distance_dict.items():
+                if distance.reachable and current_node not in to_node:
+                    reachable = True
+                    break
+
+            if not reachable:
+                unreachable_nodes.append(start_node)
+
+        for u_node in unreachable_nodes:
+            node = u_node.split('->')[1]
+            print(f"Removing unreachable node {u_node}")
+            graph.remove_node(node)
+
+    print(f"Removed {orig_node_count - len(graph.nodes)} nodes")
+    print(f"Removed {orig_edge_count - len(graph.edges)} edges")
 
     return graph
 

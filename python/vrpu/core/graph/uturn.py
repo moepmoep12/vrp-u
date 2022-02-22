@@ -119,7 +119,8 @@ class UTurnGraph(Graph):
         unexplored_states = []
 
         # initialization
-        for init_state in self._transition_function.generate_initial_states():
+        initial_states = self._transition_function.generate_initial_states()
+        for init_state in initial_states:
             unexplored_states.append(init_state)
             self.add_node(init_state.data, init_state.uid, init_state.x, init_state.y)
 
@@ -136,4 +137,4 @@ class UTurnGraph(Graph):
                     self.add_node(neighbor.data, neighbor.uid, neighbor.x, neighbor.y)
                     unexplored_states.append(neighbor)
 
-                self.add_edge(data=edge.data, from_uid=current.uid, to_uid=neighbor.uid, cost=edge.cost, directed=True)
+                self.add_edge(data=edge.data, from_uid=current.uid, to_uid=neighbor.uid, cost=edge.cost)

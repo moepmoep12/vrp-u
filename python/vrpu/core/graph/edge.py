@@ -46,3 +46,9 @@ class Edge(Generic[EdgeData], Serializable):
 
     def __repr__(self):
         return f"{{ {str(self.data)} | Cost: {self.cost} }}"
+
+    def __eq__(self, other):
+        return self.data == getattr(other, 'data', None) and self.cost == getattr(other, 'cost', None)
+
+    def __hash__(self):
+        return hash((self.data, self.cost))
