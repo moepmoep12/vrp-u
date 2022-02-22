@@ -14,7 +14,8 @@ from vrpu.solver.or_tools.or_tools_solver import SolverParams
 
 SOLVER_TYPES = [
     "OR-Tools",
-    "Genetic Algorithm"
+    "Genetic Algorithm",
+    "Local"
 ]
 
 PROBLEM_TYPES = [
@@ -50,11 +51,13 @@ class SimulatorGUI:
         self.solver_sub_frames = dict()
         self.solver_sub_frame_methods = {
             SOLVER_TYPES[0]: self._create_or_frame,
-            SOLVER_TYPES[1]: self._create_ga_frame
+            SOLVER_TYPES[1]: self._create_ga_frame,
+            SOLVER_TYPES[2]: self._create_local_solver_frame
         }
         self.create_solver_methods = {
             SOLVER_TYPES[0]: self._create_or_tools_solver,
-            SOLVER_TYPES[1]: self._create_ga_solver
+            SOLVER_TYPES[1]: self._create_ga_solver,
+            SOLVER_TYPES[2]: self._create_local_solver
         }
         self.ga_settings = {
             'population_size': 100,
@@ -66,6 +69,10 @@ class SimulatorGUI:
         self.visualization_settings = {
             'visualize': True,
             'show_edges': True
+        }
+
+        self._local_solver_settings = {
+            'greedy': True
         }
 
     def create_gui(self, root):
@@ -319,7 +326,25 @@ class SimulatorGUI:
         frame.grid()
         return frame
 
-    def _create_or_tools_solver(self, graph):
+    def _create_local_solver_frame(self, root):
+        frame = ttk.Frame(master=root, relief=tk.RAISED, borderwidth=1)
+        frame.columnconfigure(0, weight=1)
+        frame.columnconfigure(1, weight=1)
+
+        var_greedy = tk.BooleanVar()
+        var_greedy.set(self._local_solver_settings['greedy'])
+
+        check_greedy = tk.Checkbutton(frame, text="Greedy", variable=var_greedy)
+        check_greedy.pack(side=tk.LEFT)
+
+        def on_greedy_changed(*args):
+            self._local_solver_settings['greedy'] = var_greedy.get()
+
+        var_greedy.trace("w", on_greedy_changed)
+
+        return frame
+
+    def _create_or_tools_solver(self, graph) -> ISolver:
         if self.problem_type == PROBLEM_TYPES[0]:
             return SolverCVRP(NodeDistanceAStar(), graph, False, self.or_settings)
 
@@ -332,7 +357,7 @@ class SimulatorGUI:
         if self.problem_type == PROBLEM_TYPES[3]:
             return SolverVRPDPU(NodeDistanceAStar(), graph, self.or_settings)
 
-    def _create_ga_solver(self, graph):
+    def _create_ga_solver(self, graph) -> ISolver:
         pop_size = self.ga_settings['population_size']
         generations = self.ga_settings['generations']
         crossover_prob = self.ga_settings['crossover_prob']
@@ -357,6 +382,23 @@ class SimulatorGUI:
             return GASolverVRPDPU(NodeDistanceAStar(), graph=graph, population_size=pop_size, generations=generations,
                                   mutate_prob=crossover_prob,
                                   crossover_prob=mutate_prob)
+
+    def _create_local_solver(self, graph):
+        if self.problem_type == PROBLEM_TYPES[0]:
+            return LocalSolver(CyclicNeighborhoodGeneratorCVRP(), DistanceObjective(),
+                               InitSolverCVRP(NodeDistanceAStar(), graph), self._local_solver_settings['greedy'])
+
+        if self.problem_type == PROBLEM_TYPES[1]:
+            return LocalSolver(CyclicNeighborhoodGeneratorCVRP(), DistanceObjective(),
+                               InitSolverCVRPU(NodeDistanceAStar(), graph), self._local_solver_settings['greedy'])
+
+        if self.problem_type == PROBLEM_TYPES[2]:
+            return LocalSolver(CyclicNeighborhoodGeneratorVRPDP(), DistanceObjective(),
+                               InitSolverVRPDP(NodeDistanceAStar(), graph), self._local_solver_settings['greedy'])
+
+        if self.problem_type == PROBLEM_TYPES[3]:
+            return LocalSolver(CyclicNeighborhoodGeneratorVRPDP(), DistanceObjective(),
+                               InitSolverVRPDPU(NodeDistanceAStar(), graph), self._local_solver_settings['greedy'])
 
 
 if __name__ == '__main__':
