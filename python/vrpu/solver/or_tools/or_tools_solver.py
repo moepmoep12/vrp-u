@@ -1,12 +1,13 @@
 from dataclasses import dataclass
 from typing import List
 from datetime import timedelta, datetime
+from timeit import default_timer as timer
 from overrides import overrides
 from ortools.constraint_solver import pywrapcp, routing_parameters_pb2, routing_enums_pb2
 
 from vrpu.core import Tour, DriveAction, VisitAction, VRPProblem, Vehicle, Action, Solution, PickUp, Delivery, \
     NodeAction, TransportAction, SetupAction, DeliveryUTurnState, PickUpUTurnState
-from vrpu.solver.solver import ISolver
+from vrpu.solver.solver import ISolver, SolvingSnapshot
 from vrpu.core.graph.search.node_distance import INodeDistance
 
 # DIMENSIONS
@@ -45,6 +46,7 @@ class SolverCVRP(ISolver):
         self._solution: Solution = None
         self._open_vrp = open_vrp
         self._solver_params = solver_params
+        self._history: [SolvingSnapshot] = []
 
     @overrides
     def solve(self, problem: VRPProblem) -> Solution:
@@ -89,6 +91,8 @@ class SolverCVRP(ISolver):
         # Initial Solution strategy
         search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PARALLEL_CHEAPEST_INSERTION
 
+        start_timer = timer()
+
         # Start solving
         self._assignment = self._routing_model.SolveWithParameters(search_parameters)
 
@@ -96,9 +100,21 @@ class SolverCVRP(ISolver):
             print("Failed to solve...")
             return
 
-        print(f"\nFound solution with objective value {self.assignment.ObjectiveValue()}\n")
-
         self._solution = self._create_solution()
+
+        runtime = timedelta(seconds=timer() - start_timer)
+        value = sum([t.get_distance() for t in self._solution.tours])
+        self._history.append(SolvingSnapshot(
+            runtime=runtime,
+            step=1,
+            best_value=value,
+            average=value,
+            min_value=value,
+            max_value=value
+        ))
+
+        print(
+            f"\nFound solution with objective value {self.assignment.ObjectiveValue()} after {timer() - start_timer}s\n")
 
         return self._solution
 
@@ -109,6 +125,10 @@ class SolverCVRP(ISolver):
     @property
     def current_problem(self) -> VRPProblem:
         return self._current_problem
+
+    @property
+    def history(self) -> [SolvingSnapshot]:
+        return self._history
 
     @property
     def routing_model(self) -> pywrapcp.RoutingModel:

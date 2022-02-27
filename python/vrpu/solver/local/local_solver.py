@@ -1,11 +1,13 @@
 from numbers import Number
 from overrides import overrides
+from timeit import default_timer as timer
+from datetime import timedelta
 
 from vrpu.core import VRPProblem, Solution
 
 from vrpu.solver.local.neighborhood import INeighborhoodGenerator, Neighbor
 from vrpu.solver.local.objective import IObjectiveFunction
-from vrpu.solver.solver import ISolver
+from vrpu.solver.solver import ISolver, SolvingSnapshot
 from vrpu.solver.solution_encoding import EncodedAction, EncodedSolution
 
 from vrpu.solver.genetic_algorithm.ga_solver import GASolverCVRP, GASolverVRPDP, GASolverCVRPU, GASolverVRPDPU
@@ -142,12 +144,14 @@ class LocalSolver(ISolver):
         self.iteration = 0
         self.step = 0
         self.steps_without_improvement = 0
-        self.history: [Neighbor] = []
+        self.neighbor_history: [Neighbor] = []
+        self._history: [SolvingSnapshot] = []
 
     @overrides
     def solve(self, problem: VRPProblem) -> Solution:
+        start_timer = timer()
         self.step = 0
-        self.history = []
+        self.neighbor_history = []
         self.initial_solution = self.init_solver.solve(problem)
 
         self.best_solution = self.initial_solution
@@ -161,6 +165,18 @@ class LocalSolver(ISolver):
         while self.steps_without_improvement < self.neighborhood_gen.get_max_steps():
             self.iteration += 1
 
+            # Keep track of stats
+            self._history.append(
+                SolvingSnapshot(
+                    runtime=timedelta(seconds=timer() - start_timer),
+                    step=self.iteration,
+                    best_value=best_value,
+                    average=best_value,
+                    min_value=best_value,
+                    max_value=best_value
+                )
+            )
+
             best_neighbor: Neighbor = self._get_best_neighbor(self.best_solution, best_value)
             if best_neighbor is None:
                 self.steps_without_improvement += 1
@@ -171,16 +187,20 @@ class LocalSolver(ISolver):
                 best_value = best_neighbor.value
                 self.best_solution = best_neighbor.solution
                 self.steps_without_improvement = 0
-                self.history.append(best_neighbor)
+                self.neighbor_history.append(best_neighbor)
             else:
                 self.steps_without_improvement += 1
                 self.step += 1
 
             print(f"\r   Iteration: {self.iteration}, Best value: {best_value}", end='')
 
-        print(f"\n-- End of solving --")
+        print(f"\n-- End of solving after {timer() - start_timer}s --")
 
         return self.best_solution
+
+    @property
+    def history(self) -> [SolvingSnapshot]:
+        return self._history
 
     def _get_best_neighbor(self, solution: EncodedSolution, best_value: Number) -> Neighbor:
         neighborhood = self.neighborhood_gen.generate_neighborhood(solution, iteration=self.step,

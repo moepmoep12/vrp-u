@@ -8,7 +8,7 @@ from ortools.constraint_solver import routing_enums_pb2
 from vrpu.core import Graph, TransportRequest, Vehicle, VRPProblem, UTurnGraph, UTurnTransitionFunction
 from vrpu.core.graph.search import NodeDistanceAStar
 from vrpu.core.util.solution_printer import DataFramePrinter
-from vrpu.core.util.visualization import show_uturn_solution, show_solution
+from vrpu.core.util.visualization import show_uturn_solution, show_solution, show_history
 from vrpu.solver import *
 from vrpu.solver.or_tools.or_tools_solver import SolverParams
 
@@ -68,7 +68,8 @@ class SimulatorGUI:
         self.or_settings = SolverParams()
         self.visualization_settings = {
             'visualize': True,
-            'show_edges': True
+            'show_edges': True,
+            'show_history': True
         }
 
         self._local_solver_settings = {
@@ -94,12 +95,21 @@ class SimulatorGUI:
         printer = DataFramePrinter(only_node_actions=True)
         printer.print_solution(solution)
 
+        # history = getattr(solver, 'history', None)
+        # if history:
+        #     print("History:")
+        #     for entry in history:
+        #         print(entry)
+
         if self.visualization_settings['visualize']:
 
             if self._is_uturn():
                 show_uturn_solution(solution, graph, self.visualization_settings['show_edges'])
             else:
                 show_solution(solution, graph, self.visualization_settings['show_edges'])
+
+        if self.visualization_settings['show_history']:
+            show_history(solver.history)
 
     def _is_pick_and_delivery(self) -> bool:
         return self.problem_type == PROBLEM_TYPES[2] or self.problem_type == PROBLEM_TYPES[3]
@@ -223,57 +233,57 @@ class SimulatorGUI:
         lbl_pop_size = tk.Label(master=frame, text="Population Size:")
         lbl_pop_size.grid(column=0, row=0, sticky=tk.W, padx=5, pady=5)
 
-        var_pop_size = tk.IntVar()
-        var_pop_size.set(self.ga_settings['population_size'])
-        entry_pop_size = tk.Entry(master=frame, textvariable=var_pop_size)
+        self.var_pop_size = tk.IntVar()
+        self.var_pop_size.set(self.ga_settings['population_size'])
+        entry_pop_size = tk.Entry(master=frame, textvariable=self.var_pop_size)
         entry_pop_size.grid(column=1, row=0, sticky=tk.W, padx=5, pady=5)
 
         def on_pop_size_changed(*args):
             self.ga_settings['population_size'] = int(entry_pop_size.get())
 
-        var_pop_size.trace("w", on_pop_size_changed)
+        self.var_pop_size.trace_add("write", on_pop_size_changed)
 
         # generations
         lbl_generations = tk.Label(master=frame, text="Generations:")
         lbl_generations.grid(column=0, row=1, sticky=tk.W, padx=5, pady=5)
 
-        var_generations = tk.IntVar()
-        var_generations.set(self.ga_settings['generations'])
-        entry_generations = tk.Entry(master=frame, textvariable=var_generations)
+        self.var_generations = tk.IntVar()
+        self.var_generations.set(self.ga_settings['generations'])
+        entry_generations = tk.Entry(master=frame, textvariable=self.var_generations)
         entry_generations.grid(column=1, row=1, sticky=tk.W, padx=5, pady=5)
 
         def on_generations_changed(*args):
             self.ga_settings['generations'] = int(entry_generations.get())
 
-        var_generations.trace("w", on_generations_changed)
+        self.var_generations.trace("w", on_generations_changed)
 
         # crossover
         lbl_crossover = tk.Label(master=frame, text="Crossover Probability:")
         lbl_crossover.grid(column=0, row=2, sticky=tk.W, padx=5, pady=5)
 
-        var_crossover = tk.StringVar()
-        var_crossover.set(self.ga_settings['crossover_prob'])
-        entry_crossover = tk.Entry(master=frame, textvariable=var_crossover)
+        self.var_crossover = tk.StringVar()
+        self.var_crossover.set(self.ga_settings['crossover_prob'])
+        entry_crossover = tk.Entry(master=frame, textvariable=self.var_crossover)
         entry_crossover.grid(column=1, row=2, sticky=tk.W, padx=5, pady=5)
 
         def on_crossover_changed(*args):
             self.ga_settings['crossover_prob'] = float(entry_crossover.get())
 
-        var_crossover.trace("w", on_crossover_changed)
+        self.var_crossover.trace("w", on_crossover_changed)
 
         # mutation
         lbl_mutate = tk.Label(master=frame, text="Mutation Probability:")
         lbl_mutate.grid(column=0, row=3, sticky=tk.W, padx=5, pady=5)
 
-        var_mutate = tk.StringVar()
-        var_mutate.set(self.ga_settings['mutate_prob'])
-        entry_mutate = tk.Entry(master=frame, textvariable=var_mutate)
+        self.var_mutate = tk.StringVar()
+        self.var_mutate.set(self.ga_settings['mutate_prob'])
+        entry_mutate = tk.Entry(master=frame, textvariable=self.var_mutate)
         entry_mutate.grid(column=1, row=3, sticky=tk.W, padx=5, pady=5)
 
         def on_mutate_changed(*args):
             self.ga_settings['mutate_prob'] = float(entry_mutate.get())
 
-        var_mutate.trace("w", on_mutate_changed)
+        self.var_mutate.trace("w", on_mutate_changed)
 
         frame.grid()
         return frame
@@ -302,6 +312,17 @@ class SimulatorGUI:
             self.visualization_settings['show_edges'] = var_show_edges.get()
 
         var_show_edges.trace("w", on_show_edges_changed)
+
+        var_visualize_history = tk.BooleanVar()
+        var_visualize_history.set(self.visualization_settings['show_history'])
+
+        check_visualize_history = tk.Checkbutton(frame, text="Visualize solver history", variable=var_visualize_history)
+        check_visualize_history.pack(side=tk.LEFT)
+
+        def on_visualize_history_changed(*args):
+            self.visualization_settings['show_history'] = var_visualize_history.get()
+
+        var_visualize_history.trace("w", on_visualize_history_changed)
 
         frame.pack(fill=tk.X)
 

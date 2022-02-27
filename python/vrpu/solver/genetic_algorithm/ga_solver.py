@@ -1,18 +1,16 @@
-import json
 import random
-from datetime import datetime, timedelta
+from datetime import timedelta
 from operator import itemgetter
 from typing import List, Tuple, Dict
 from overrides import overrides
 from deap import creator, base, tools
+from timeit import default_timer as timer
 
-from vrpu.core import VRPProblem, Solution, TransportRequest, Vehicle, Graph, PickUp, Delivery, Tour, Action, \
-    SetupAction, DriveAction, VisitAction, NodeAction, UTurnGraph, UTurnTransitionFunction, DeliveryUTurnState, \
+from vrpu.core import VRPProblem, Solution, Vehicle, PickUp, Delivery, Tour, \
+    SetupAction, DriveAction, VisitAction, NodeAction, DeliveryUTurnState, \
     PickUpUTurnState
-from vrpu.core.graph.search.node_distance import NodeDistanceAStar, CachedNodeDistance
-from vrpu.core.util.solution_printer import DataFramePrinter
-from vrpu.core.util.visualization import show_uturn_solution
-from vrpu.solver.solver import ISolver
+from vrpu.core.graph.search.node_distance import CachedNodeDistance
+from vrpu.solver.solver import ISolver, SolvingSnapshot
 
 FITNESS_FCT_NAME = 'FitnessMax'
 INDIVIDUAL_NAME = 'Individual'
@@ -35,6 +33,8 @@ class GASolverCVRP(ISolver):
         self._current_problem: VRPProblem = None
         self._graph = graph
         self._actions = []
+        self._history: [SolvingSnapshot] = []
+        self._best_individual = None
 
     def solve(self, problem: VRPProblem) -> Solution:
         self._current_problem = problem
@@ -74,6 +74,19 @@ class GASolverCVRP(ISolver):
             ind.fitness.values = fit
         print(f"   Evaluated {len(population)} individuals")
 
+        # Remember best individual
+        best_ind = tools.selBest(population, 1)[0]
+        self._best_individual = best_ind
+        values = [ind.fitness.values[1] for ind in population]
+        start_timer = timer()
+        self._history.append(
+            SolvingSnapshot(runtime=timedelta(seconds=timer() - start_timer),
+                            step=0,
+                            best_value=best_ind.fitness.values[1],
+                            average=sum(values) / len(values),
+                            min_value=min(values),
+                            max_value=max(values)))
+
         # start GA algorithm
         for generation in range(self.generations):
 
@@ -105,14 +118,30 @@ class GASolverCVRP(ISolver):
             # The population is entirely replaced by the offspring
             population[:] = random.sample(children, len(children))
 
+            # Output currently best individual
             best_ind = tools.selBest(population, 1)[0]
+            if best_ind.fitness.values[0] > self._best_individual.fitness.values[0]:
+                self._best_individual = best_ind
             print(f"\r   Generation {generation + 1}/{self.generations}"
                   f"   Best Fitness: {best_ind.fitness.values}", end='')
 
-        print('\n-- End of (successful) evolution --')
+            # Keep track of stats
+            values = [ind.fitness.values[1] for ind in population]
+            self._history.append(
+                SolvingSnapshot(runtime=timedelta(seconds=timer() - start_timer),
+                                step=generation + 1,
+                                best_value=best_ind.fitness.values[1],
+                                average=sum(values) / len(values),
+                                min_value=min(values),
+                                max_value=max(values)))
 
-        best_ind = tools.selBest(population, 1)[0]
-        return self._individual_to_solution(best_ind)
+        print(f"\n-- End of (successful) evolution after {timer() - start_timer}s --")
+
+        return self._individual_to_solution(self._best_individual)
+
+    @property
+    def history(self) -> [SolvingSnapshot]:
+        return self._history
 
     def _setup_node_distance_function(self):
         """
@@ -744,96 +773,3 @@ class GASolverVRPDPU(GASolverCVRPU):
                 individual[i + 1] = (new_vehicle, individual[i + 1][1]), individual[i + 1][2]
 
         return individual
-
-
-if __name__ == '__main__':
-    vehicles = []
-    calc_time = datetime.now()
-    trqs = []
-    # random.seed(13)
-
-    # with open('../../../../data/cvrp_1.json') as f:
-    #     data = json.load(f)
-    #
-    # depot = data['depot']
-    #
-    # graph = Graph.from_json(data['graph'])
-    #
-    # for i, rq in enumerate(data['requests']):
-    #     trq = TransportRequest(str(i), depot, rq['to_node'], calc_time, 1)
-    #     trqs.append(trq)
-    #
-    # for i in range(data['vehicle_count']):
-    #     v = Vehicle(str(i), depot, '', calc_time, data['max_capacity'], 1)
-    #     vehicles.append(v)
-    #
-    # problem = VRPProblem(transport_requests=trqs, vehicles=vehicles, calculation_time=calc_time,
-    #                      pick_duration=timedelta(seconds=0),
-    #                      delivery_duration=timedelta(seconds=0), vehicle_velocity=1)
-    #
-    # solver = GASolverCVRP(NodeDistanceAStar(), graph=graph, population_size=500, generations=2000, mutate_prob=0.03,
-    #                       crossover_prob=0.7)
-    # solution = solver.solve(problem)
-    #
-    # printer = DataFramePrinter(only_node_actions=True)
-    # printer.print_solution(solution)
-    #
-    # show_solution(solution, graph, True)
-
-    # with open('../../../../data/vrpdp_0.json') as f:
-    #     data = json.load(f)
-    #
-    # depot = data['depot']
-    #
-    # graph = Graph.from_json(data['graph'])
-    #
-    # for i, rq in enumerate(data['requests']):
-    #     trq = TransportRequest(str(i), rq['from_node'], rq['to_node'], calc_time, 1)
-    #     trqs.append(trq)
-    #
-    # for i in range(data['vehicle_count']):
-    #     v = Vehicle(str(i), depot, '', calc_time, data['max_capacity'], 1)
-    #     vehicles.append(v)
-    #
-    # problem = VRPProblem(transport_requests=trqs, vehicles=vehicles, calculation_time=calc_time,
-    #                      pick_duration=timedelta(seconds=0),
-    #                      delivery_duration=timedelta(seconds=0), vehicle_velocity=1)
-    #
-    # solver = GASolverVRPDP(NodeDistanceAStar(), graph=graph, population_size=1000, generations=500, mutate_prob=0.08,
-    #                        crossover_prob=0.7)
-    # solution = solver.solve(problem)
-    #
-    # printer = DataFramePrinter(only_node_actions=True)
-    # printer.print_solution(solution)
-    #
-    # show_solution(solution, graph, True)
-
-    with open('../../../../data/cvrp_1.json') as f:
-        data = json.load(f)
-
-    depot = data['depot']
-
-    graph = Graph.from_json(data['graph'])
-    state_graph = UTurnGraph(UTurnTransitionFunction(graph), graph)
-
-    for i, rq in enumerate(data['requests']):
-        trq = TransportRequest(str(i), rq['from_node'], rq['to_node'], calc_time, 1)
-        trqs.append(trq)
-
-    for i in range(data['vehicle_count']):
-        v = Vehicle(str(i), depot, '', calc_time, data['max_capacity'], 1)
-        vehicles.append(v)
-
-    problem = VRPProblem(transport_requests=trqs, vehicles=vehicles, calculation_time=calc_time,
-                         pick_duration=timedelta(seconds=0),
-                         delivery_duration=timedelta(seconds=0), vehicle_velocity=1)
-
-    solver = GASolverCVRPU(NodeDistanceAStar(), graph=state_graph, population_size=500, generations=2000,
-                           mutate_prob=0.16,
-                           crossover_prob=0.7)
-    solution = solver.solve(problem)
-
-    printer = DataFramePrinter(only_node_actions=True)
-    printer.print_solution(solution)
-
-    show_uturn_solution(solution, state_graph, True)
