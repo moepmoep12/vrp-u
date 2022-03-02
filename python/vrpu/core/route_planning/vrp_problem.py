@@ -17,7 +17,8 @@ class VRPProblem(Serializable):
                  calculation_time: datetime,
                  pick_duration: timedelta,
                  delivery_duration: timedelta,
-                 vehicle_velocity: float):
+                 vehicle_velocity: float,
+                 depot: str):
         """
         :param transport_requests: All transport requests that need to be assigned to tours.
         :param vehicles: All available vehicles.
@@ -25,6 +26,7 @@ class VRPProblem(Serializable):
         :param pick_duration: Execution duration for pickup action of a transport request.
         :param delivery_duration: Execution duration for delivery action of a transport request.
         :param vehicle_velocity: The velocity of the vehicles in km/h.
+        :param depot: UID of depot node.
         """
 
         self._transport_requests = transport_requests
@@ -33,6 +35,7 @@ class VRPProblem(Serializable):
         self._pick_duration = pick_duration
         self._delivery_duration = delivery_duration
         self._vehicle_velocity = vehicle_velocity
+        self._depot = depot
 
     @property
     def transport_requests(self) -> List[TransportRequest]:
@@ -89,6 +92,10 @@ class VRPProblem(Serializable):
 
         return txt
 
+    @property
+    def depot(self):
+        return self._depot
+
     @overrides
     def serialize(self) -> Dict[str, object]:
         return dict(
@@ -97,5 +104,6 @@ class VRPProblem(Serializable):
             calculation_time=str(self.calculation_time),
             pick_duration=str(self.pick_duration),
             delivery_duration=str(self.delivery_duration),
-            vehicle_velocity=self.vehicle_velocity
+            vehicle_velocity=self.vehicle_velocity,
+            depot=self.depot
         )

@@ -7,8 +7,7 @@ from ortools.constraint_solver import routing_enums_pb2
 
 from vrpu.core import Graph, TransportRequest, Vehicle, VRPProblem, UTurnGraph, UTurnTransitionFunction
 from vrpu.core.graph.search import NodeDistanceAStar
-from vrpu.core.util.solution_printer import DataFramePrinter
-from vrpu.core.util.visualization import show_uturn_solution, show_solution, show_history
+from vrpu.visualization import SolutionRenderer, DataFramePrinter, SolverRenderer, GraphRenderer
 from vrpu.solver import *
 from vrpu.solver.or_tools.or_tools_solver import SolverParams
 
@@ -81,9 +80,7 @@ class SimulatorGUI:
         self._create_solver_params_frame(root)
         self._create_visualization_frame(root)
         self._create_scenario_frame(root)
-
-        run_btn = tk.Button(root, text='Start Simulation', command=self._start_simulation, height=4, width=20)
-        run_btn.pack()
+        self._create_run_frame(root)
 
     def _start_simulation(self):
         problem = self._load_problem(self.scenario_path)
@@ -95,21 +92,14 @@ class SimulatorGUI:
         printer = DataFramePrinter(only_node_actions=True)
         printer.print_solution(solution)
 
-        # history = getattr(solver, 'history', None)
-        # if history:
-        #     print("History:")
-        #     for entry in history:
-        #         print(entry)
-
         if self.visualization_settings['visualize']:
-
-            if self._is_uturn():
-                show_uturn_solution(solution, graph, self.visualization_settings['show_edges'])
-            else:
-                show_solution(solution, graph, self.visualization_settings['show_edges'])
+            solution_renderer = SolutionRenderer()
+            solution_renderer.render_solution(solution, graph,
+                                              show_graph_edges=self.visualization_settings['show_edges'])
 
         if self.visualization_settings['show_history']:
-            show_history(solver.history)
+            solver_renderer = SolverRenderer()
+            solver_renderer.render_solver_history(solver.history)
 
     def _is_pick_and_delivery(self) -> bool:
         return self.problem_type == PROBLEM_TYPES[2] or self.problem_type == PROBLEM_TYPES[3]
@@ -127,10 +117,8 @@ class SimulatorGUI:
 
         depot = data['depot']
 
-        is_pick_and_delivery = self._is_pick_and_delivery()
-
         for i, rq in enumerate(data['requests']):
-            from_node = rq['from_node'] if is_pick_and_delivery else depot
+            from_node = rq.get('from_node', depot)
             trq = TransportRequest(str(i), from_node, rq['to_node'], calc_time, 1)
             trqs.append(trq)
 
@@ -140,7 +128,7 @@ class SimulatorGUI:
 
         problem = VRPProblem(transport_requests=trqs, vehicles=vehicles, calculation_time=calc_time,
                              pick_duration=timedelta(seconds=0),
-                             delivery_duration=timedelta(seconds=0), vehicle_velocity=1)
+                             delivery_duration=timedelta(seconds=0), vehicle_velocity=1, depot=depot)
         return problem
 
     def _load_graph(self, path):
@@ -152,6 +140,24 @@ class SimulatorGUI:
             return UTurnGraph(UTurnTransitionFunction(graph), graph)
         else:
             return graph
+
+    def _create_run_frame(self, root):
+        frame = ttk.Frame(master=root, relief=tk.RAISED, borderwidth=1)
+
+        def visualize_scenario():
+            problem = self._load_problem(self.scenario_path)
+            graph = self._load_graph(self.scenario_path)
+
+            graph_renderer = GraphRenderer()
+            graph_renderer.render_graph(graph, trqs=problem.transport_requests, depot=problem.depot)
+
+        vis_btn = tk.Button(frame, text='Visualize Scenario', command=visualize_scenario, height=4, width=20)
+        vis_btn.grid(column=0, row=0, sticky=tk.W, padx=10)
+
+        run_btn = tk.Button(frame, text='Start Simulation', command=self._start_simulation, height=4, width=20)
+        run_btn.grid(column=1, row=0, sticky=tk.W, padx=10)
+
+        frame.pack(fill=tk.X)
 
     def _create_scenario_frame(self, root):
         frame = ttk.Frame(master=root, relief=tk.RAISED, borderwidth=1)
