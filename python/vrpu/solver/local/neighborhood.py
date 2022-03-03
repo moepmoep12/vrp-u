@@ -61,6 +61,16 @@ class CyclicNeighborhoodGeneratorCVRP(INeighborhoodGenerator):
         }
 
     def generate_neighborhood(self, solution: EncodedSolution, **kwargs) -> [Neighbor]:
+        """
+        Generates a neighborhood of a given solution.
+        :param solution: The solution.
+        :param kwargs: Key worded arguments.
+            :keyword step: The current step in the cycle.
+            :keyword greedy: Whether the first better neighbor shall be returned.
+            :keyword best_value: The current best value.
+            :keyword objective: The objective function used for evaluation.
+        :return: A list of neighbor solution of the given solution.
+        """
         step = kwargs.get('iteration', 0)
         greedy = kwargs.get('greedy', True)
         best_value = kwargs.get('best_value', sys.maxsize)

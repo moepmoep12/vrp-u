@@ -1,31 +1,107 @@
+import sys
 from numbers import Number
 from overrides import overrides
 from timeit import default_timer as timer
 from datetime import timedelta
 
-from vrpu.core import VRPProblem, Solution
+from vrpu.core import VRPProblem, Solution, Delivery, DeliveryUTurnState, Vehicle
+from vrpu.core.graph.search.node_distance import CachedNodeDistance
 
 from vrpu.solver.local.neighborhood import INeighborhoodGenerator, Neighbor
 from vrpu.solver.local.objective import IObjectiveFunction
 from vrpu.solver.solver import ISolver, SolvingSnapshot
 from vrpu.solver.solution_encoding import EncodedAction, EncodedSolution
 
-from vrpu.solver.genetic_algorithm.ga_solver import GASolverCVRP, GASolverVRPDP, GASolverCVRPU, GASolverVRPDPU
+from vrpu.solver.genetic_algorithm.ga_solver import GASolverVRPDP, GASolverVRPDPU
 
 
-class InitSolverCVRP(GASolverCVRP):
+class InitSolverCVRP(ISolver):
+
+    def __init__(self, node_distance: CachedNodeDistance, graph):
+        self._node_distance: CachedNodeDistance = node_distance
+        self._current_solution: EncodedSolution = None
+        self._current_problem: VRPProblem = None
+        self._graph = graph
+        self._actions = []
+        self._history: [SolvingSnapshot] = []
+        self._start_nodes = []
 
     @overrides
     def solve(self, problem: VRPProblem) -> Solution:
         self._current_problem = problem
         self._actions = self._create_actions()
         self._setup_node_distance_function()
-        individual = self._init_individual()
+        self._start_nodes = [self._get_start_node_for_vehicle(v) for v in self._current_problem.vehicles]
+        self._current_solution = EncodedSolution([None] * len(self._actions),
+                                                 self._actions,
+                                                 self._current_problem.vehicles,
+                                                 self._start_nodes,
+                                                 self._node_distance)
 
-        return EncodedSolution([EncodedAction(a[0], a[1]) for a in individual], self._actions,
-                               self._current_problem.vehicles,
-                               [self._get_start_node_for_vehicle(v) for v in self._current_problem.vehicles],
-                               self._node_distance)
+        actions_inserted = [False] * len(self._actions)
+        current_vehicle_idx = 0
+        current_vehicle = self._current_problem.vehicles[current_vehicle_idx]
+        current_load = 0
+
+        while not all(actions_inserted):
+
+            action_to_insert_indices = self._choose_actions_to_insert(actions_inserted, current_vehicle_idx)
+            for action_index in action_to_insert_indices:
+                encoded_action = EncodedAction(current_vehicle_idx, sum(actions_inserted))
+                self._current_solution[action_index] = encoded_action
+
+                current_load += 1
+                actions_inserted[action_index] = True
+
+                if current_load >= current_vehicle.max_capacity:
+                    current_vehicle_idx += 1
+                    current_vehicle = self._current_problem.vehicles[current_vehicle_idx]
+                    current_load = 0
+
+        return self._current_solution
+
+    @property
+    def history(self) -> [SolvingSnapshot]:
+        return self._history
+
+    def _create_actions(self):
+        """
+        :return: All actions for the current problem.
+        """
+        delivery_duration = timedelta(seconds=self._current_problem.delivery_duration.total_seconds())
+        deliveries = [Delivery(trq, delivery_duration) for trq in self._current_problem.transport_requests]
+        return [*deliveries]
+
+    def _setup_node_distance_function(self):
+        """
+        Sets up the node distance function to pre-calculate needed distances.
+        """
+        nodes = [a.node for a in self._actions]
+        nodes.extend([v.current_node for v in self._current_problem.vehicles])
+        nodes = set(nodes)
+        self._node_distance.calculate_distances(self._graph, nodes)
+
+    def _get_start_node_for_vehicle(self, vehicle: Vehicle):
+        return vehicle.current_node
+
+    def _choose_actions_to_insert(self, actions_inserted: [bool], vehicle_index: int) -> [int]:
+        best_action_index = 0
+        best_value = sys.maxsize
+
+        for i, (action, inserted) in enumerate(zip(self._actions, actions_inserted)):
+            if inserted:
+                continue
+
+            # simulate the action being inserted and calculate the resulting total distance of the solution
+            clone = self._current_solution.clone()
+            clone[i] = EncodedAction(vehicle_index, sum(actions_inserted))
+
+            distance = sum(t.get_distance() for t in clone.tours)
+            if distance < best_value:
+                best_action_index = i
+                best_value = distance
+
+        return [best_action_index]
 
 
 class InitSolverVRPDP(GASolverVRPDP):
@@ -43,39 +119,60 @@ class InitSolverVRPDP(GASolverVRPDP):
                                self._node_distance)
 
 
-class InitSolverCVRPU(GASolverCVRPU):
-
-    def _init_individual(self):
-        """
-        :return: An initial individual consisting of a list of tuples indicating for every action to which
-        vehicle it belongs and its value.
-        """
-        keys = []
-        vehicle_index = 0
-        load = 0
-
-        for i in range(len(self._actions)):
-            vehicle = self._current_problem.vehicles[vehicle_index]
-            value = self._generate_value(existing_values=[key[1] for key in keys], min_val=1, max_val=999)
-            keys.append((vehicle_index, value))
-            load += 1
-            if load >= vehicle.max_capacity:
-                load = 0
-                vehicle_index += 1
-
-        return keys
+class InitSolverCVRPU(InitSolverCVRP):
 
     @overrides
-    def solve(self, problem: VRPProblem) -> Solution:
-        self._current_problem = problem
-        self._actions = self._create_actions()
-        self._setup_node_distance_function()
-        individual = self._init_individual()
+    def _setup_node_distance_function(self):
+        """
+        Sets up the node distance function to pre-calculate needed distances.
+        """
+        node_sets = [[a.node for a in a_list] for a_list in self._actions]
+        nodes = []
+        for node_set in node_sets:
+            nodes.extend(node_set)
+        nodes.extend([self._get_start_node_for_vehicle(v) for v in self._current_problem.vehicles])
+        nodes = set(nodes)
+        self._node_distance.calculate_distances(self._graph, nodes)
 
-        return EncodedSolution([EncodedAction(a[0], a[1]) for a in individual], self._actions,
-                               self._current_problem.vehicles,
-                               [self._get_start_node_for_vehicle(v) for v in self._current_problem.vehicles],
-                               self._node_distance)
+    def _create_actions(self) -> [[DeliveryUTurnState]]:
+        """
+        :return: All actions for the current problem.
+        Every Delivery can be executed with one of many DeliveryUTurnStates.
+        """
+        actions = []
+
+        for i, trq in enumerate(self._current_problem.transport_requests):
+            actions.append(
+                [DeliveryUTurnState(trq, i, node_state, self._current_problem.delivery_duration)
+                 for node_state in self._get_possible_state_nodes(trq.to_node)])
+
+        return actions
+
+    def _get_possible_state_nodes(self, current_node: str):
+        """
+        Returns possible states for a specific node.
+        :param current_node: UID of a node.
+        :return: All possible UTurn-States for this node.
+        """
+        result = []
+
+        for uid, node in self._graph.nodes.items():
+            if node.data.current_node == current_node:
+                result.append(uid)
+
+        return result
+
+    @overrides
+    def _get_start_node_for_vehicle(self, vehicle: Vehicle):
+        if vehicle.node_arriving_from:
+            for uid, node in self._graph.nodes.items():
+                if node.data.current_node == vehicle.current_node \
+                        and node.data.prev_node == vehicle.node_arriving_from:
+                    return uid
+
+        else:
+            # free choice
+            return self._get_possible_state_nodes(vehicle.current_node)[0]
 
 
 class InitSolverVRPDPU(GASolverVRPDPU):

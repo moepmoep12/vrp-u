@@ -49,7 +49,7 @@ class EncodedSolution(list, Solution):
         return self.to_solution().tours
 
     def clone(self):
-        return EncodedSolution([e.clone() for e in self], self.actions, self.vehicles, self.start_nodes,
+        return EncodedSolution([e.clone() if e else None for e in self], self.actions, self.vehicles, self.start_nodes,
                                self.node_distance_func)
 
     def to_actions(self) -> Dict[int, List[NodeAction]]:
@@ -61,6 +61,8 @@ class EncodedSolution(list, Solution):
         [actions_per_vehicle.setdefault(i, []) for i in range(len(self.vehicles))]
 
         for action_index, encoded_action in enumerate(self):
+            if encoded_action is None:
+                continue
             actions_per_vehicle[encoded_action.vehicle_index].append((self.actions[action_index], encoded_action.value))
 
         # sort actions for each vehicle according to their value
