@@ -2,8 +2,11 @@ from abc import ABC, abstractmethod
 from overrides import overrides
 from datetime import timedelta
 import pandas as pd
+import logging
 
 from vrpu.core import Solution, Tour, NodeAction
+
+logger = logging.getLogger('clean')
 
 
 class ISolutionPrinter(ABC):
@@ -54,17 +57,17 @@ class DataFramePrinter(ISolutionPrinter):
             total_duration += tour.get_duration()
             total_distance += tour.get_distance()
 
-            print(f"Tour for vehicle {tour.assigned_vehicle.uid}:\n")
-            print(df.to_string(
+            logger.debug(f"\nTour for vehicle {tour.assigned_vehicle.uid}:")
+            logger.debug(df.to_string(
                 justify='center',
                 formatters={'Distance': lambda d: f"{d}m" if d or d == 0 else ''}))
 
-            print(f"Tour Distance: {tour.get_distance()}m")
-            print(f"Tour Duration: {tour.get_duration()}")
-            print("---------------------------------------------\n")
+            logger.debug(f"Tour Distance: {tour.get_distance()}m")
+            logger.debug(f"Tour Duration: {tour.get_duration()}")
+            logger.debug("---------------------------------------------")
 
-        print(f"Total Distance: {total_distance}m")
-        print(f"Total Duration: {total_duration}h")
+        logger.debug(f"Total Distance: {total_distance}m")
+        logger.debug(f"Total Duration: {total_duration}h\n")
 
     def _get_dataframe(self, tour: Tour) -> pd.DataFrame:
         rows = []

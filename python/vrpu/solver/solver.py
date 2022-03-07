@@ -1,22 +1,30 @@
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from datetime import timedelta
 from numbers import Number
 
 from vrpu.core import VRPProblem, Solution
+from vrpu.core.route_planning.serializable import Serializable
 
 
 @dataclass
-class SolvingSnapshot:
+class SolvingSnapshot(Serializable):
     """
     Snapshot during solving. Keeps track of stats.
     """
     runtime: timedelta
+    setup_time: timedelta
     step: int
     best_value: Number
     average: Number
     min_value: Number
     max_value: Number
+
+    def serialize(self):
+        result = asdict(self)
+        result['runtime'] = str(self.runtime)
+        result['setup_time'] = str(self.setup_time)
+        return result
 
 
 class ISolver(ABC):

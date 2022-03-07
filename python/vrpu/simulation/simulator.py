@@ -1,5 +1,10 @@
 import json
+import os
+import re
 import tkinter as tk
+import yaml
+import logging
+import logging.config
 from datetime import datetime, timedelta
 from tkinter import filedialog, ttk
 
@@ -7,9 +12,13 @@ from ortools.constraint_solver import routing_enums_pb2
 
 from vrpu.core import Graph, TransportRequest, Vehicle, VRPProblem, UTurnGraph, UTurnTransitionFunction
 from vrpu.core.graph.search import NodeDistanceAStar
+from vrpu.core.route_planning.serializable import JSONSerializer
 from vrpu.visualization import SolutionRenderer, DataFramePrinter, SolverRenderer, GraphRenderer
 from vrpu.solver import *
 from vrpu.solver.or_tools.or_tools_solver import SolverParams
+
+logger = logging.getLogger('simulator')
+progress_logger = logging.getLogger('progress')
 
 SOLVER_TYPES = [
     "OR-Tools",
@@ -59,16 +68,19 @@ class SimulatorGUI:
             SOLVER_TYPES[2]: self._create_local_solver
         }
         self.ga_settings = {
-            'population_size': 100,
-            'generations': 100,
+            'population_size': 300,
+            'generations': 400,
             'crossover_prob': 0.7,
             'mutate_prob': 0.03
         }
         self.or_settings = SolverParams()
         self.visualization_settings = {
-            'visualize': True,
+            'visualize': False,
             'show_edges': True,
-            'show_history': True
+            'show_history': False,
+            'print_history': True,
+            'print_solution': True,
+            'save_history': True
         }
 
         self._local_solver_settings = {
@@ -89,8 +101,12 @@ class SimulatorGUI:
 
         solution = solver.solve(problem)
 
-        printer = DataFramePrinter(only_node_actions=True)
-        printer.print_solution(solution)
+        if self.visualization_settings['print_solution']:
+            printer = DataFramePrinter(only_node_actions=True)
+            printer.print_solution(solution)
+
+        if self.visualization_settings['save_history']:
+            self._save_history(solver)
 
         if self.visualization_settings['visualize']:
             solution_renderer = SolutionRenderer()
@@ -100,6 +116,80 @@ class SimulatorGUI:
         if self.visualization_settings['show_history']:
             solver_renderer = SolverRenderer()
             solver_renderer.render_solver_history(solver.history)
+
+        if self.visualization_settings['print_history']:
+            logger.info("Solver history:")
+            for entry in solver.history:
+                logger.info(f"   {entry}")
+
+    def _run_all(self):
+        data_root_path = f"../../../data/scenarios/cvrp"
+        solver_types = [self.solver_type]
+        problem_types = [self.problem_type]
+        logging.disable(logging.DEBUG)
+
+        for i, solver_type in enumerate(solver_types):
+            self.solver_type = solver_type
+
+            for j, problem_type in enumerate(problem_types):
+                self.problem_type = problem_type
+
+                for path, dirs, files in os.walk(os.path.abspath(data_root_path)):
+                    for k, file_name in enumerate(files):
+                        progress_logger.info(f"\rSolver {solver_type} {i + 1}/{len(solver_types)}  "
+                                             f"Problem type {problem_type} {j + 1}/{len(problem_types)}  "
+                                             f"File {file_name} {k + 1}/{len(files)}")
+                        self.scenario_path = os.path.join(path, file_name)
+
+                        self._start_simulation()
+        progress_logger.info('\n\r')
+        # data_root_path = f"../../../data/scenarios/vrpdp"
+        #
+        # for path, dirs, files in os.walk(os.path.abspath(data_root_path)):
+        #     for problem_type in [PROBLEM_TYPES[2], PROBLEM_TYPES[3]]:
+        #         self.problem_type = problem_type
+        #
+        #         for solver_type in SOLVER_TYPES:
+        #             self.solver_type = solver_type
+        #
+        #             for file_name in files:
+        #                 self.scenario_path = file_name
+        #
+        #                 self._start_simulation()
+        # progress_logger.info('\n\r')
+        logging.disable(logging.NOTSET)
+
+    def _save_history(self, solver: ISolver):
+        scenario_name = os.path.basename(self.scenario_path)
+        re_result = re.search(r"(.*)(\.json)", scenario_name)
+        scenario_name = re_result.group(1)
+        file_name = f"result_{scenario_name}.json"
+        result = {
+            'solver_type': self.solver_type,
+            'problem_type': self.problem_type,
+            'scenario_name': scenario_name,
+            'value': solver.history[-1].best_value,
+            'total_runtime': str(solver.history[-1].runtime),
+            'setup_time': str(solver.history[0].setup_time),
+            'history': solver.history
+        }
+        if self.solver_type == SOLVER_TYPES[0]:
+            result['solver_settings'] = self.or_settings
+        if self.solver_type == SOLVER_TYPES[1]:
+            result['solver_settings'] = self.ga_settings
+        if self.solver_type == SOLVER_TYPES[2]:
+            result['solver_settings'] = self._local_solver_settings
+
+        file_path = f"../../../data/results/{self.solver_type}/{self.problem_type}/"
+        if not os.path.exists(f"../../../data/results/{self.solver_type}"):
+            os.mkdir(f"../../../data/results/{self.solver_type}")
+        if not os.path.exists(file_path):
+            os.mkdir(file_path)
+        file_path = os.path.join(file_path, file_name)
+        with open(file_path, 'w') as file:
+            serialized = json.dumps(result, indent=4, cls=JSONSerializer)
+            file.write(serialized)
+            # logger.info(f"History saved to {file_path}")
 
     def _is_pick_and_delivery(self) -> bool:
         return self.problem_type == PROBLEM_TYPES[2] or self.problem_type == PROBLEM_TYPES[3]
@@ -157,6 +247,9 @@ class SimulatorGUI:
         run_btn = tk.Button(frame, text='Start Simulation', command=self._start_simulation, height=4, width=20)
         run_btn.grid(column=1, row=0, sticky=tk.W, padx=10)
 
+        run_all_btn = tk.Button(frame, text='Run all scenarios', command=self._run_all, height=4, width=20)
+        run_all_btn.grid(column=2, row=0, sticky=tk.W, padx=10)
+
         frame.pack(fill=tk.X)
 
     def _create_scenario_frame(self, root):
@@ -190,13 +283,13 @@ class SimulatorGUI:
         frame.columnconfigure(1, weight=1)
 
         lbl_solver = tk.Label(master=frame, text="Solver:")
-        lbl_solver.grid(column=0, row=0, sticky=tk.W, padx=10)
+        lbl_solver.grid(column=0, row=0, sticky=tk.W, padx=5)
 
         def on_solver_type_changed(*args):
             for name, frame in self.solver_sub_frames.items():
                 frame.grid_forget()
 
-            self.solver_sub_frames[var_solver.get()].grid()
+            self.solver_sub_frames[var_solver.get()].grid(column=0, row=2, sticky=tk.W)
             self.solver_type = var_solver.get()
 
         var_solver = tk.StringVar(frame)
@@ -218,12 +311,12 @@ class SimulatorGUI:
         var_type.trace("w", on_problem_type_change)
 
         lbl_type = tk.Label(master=frame, text="Problem type:")
-        lbl_type.grid(column=0, row=1, sticky=tk.W, padx=10)
+        lbl_type.grid(column=0, row=1, sticky=tk.W, padx=5)
 
         drop_down_solver = tk.OptionMenu(frame, var_type, *PROBLEM_TYPES)
         drop_down_solver.grid(column=1, row=1, sticky=tk.W)
 
-        frame.pack()
+        frame.pack(fill=tk.X)
 
         on_solver_type_changed()
 
@@ -330,6 +423,39 @@ class SimulatorGUI:
 
         var_visualize_history.trace("w", on_visualize_history_changed)
 
+        var_print_history = tk.BooleanVar()
+        var_print_history.set(self.visualization_settings['print_history'])
+
+        check_print_history = tk.Checkbutton(frame, text="Print solver history", variable=var_print_history)
+        check_print_history.pack(side=tk.LEFT)
+
+        def on_print_history_changed(*args):
+            self.visualization_settings['print_history'] = var_print_history.get()
+
+        var_print_history.trace("w", on_print_history_changed)
+
+        var_print_solution = tk.BooleanVar()
+        var_print_solution.set(self.visualization_settings['print_solution'])
+
+        check_print_solution = tk.Checkbutton(frame, text="Print solution", variable=var_print_solution)
+        check_print_solution.pack(side=tk.LEFT)
+
+        def on_print_solution_changed(*args):
+            self.visualization_settings['print_solution'] = var_print_solution.get()
+
+        var_print_solution.trace("w", on_print_solution_changed)
+
+        var_save_history = tk.BooleanVar()
+        var_save_history.set(self.visualization_settings['save_history'])
+
+        check_save_history = tk.Checkbutton(frame, text="Save history", variable=var_save_history)
+        check_save_history.pack(side=tk.LEFT)
+
+        def on_save_history_changed(*args):
+            self.visualization_settings['save_history'] = var_save_history.get()
+
+        var_save_history.trace("w", on_save_history_changed)
+
         frame.pack(fill=tk.X)
 
     def _create_or_frame(self, root):
@@ -338,7 +464,7 @@ class SimulatorGUI:
         frame.columnconfigure(1, weight=1)
 
         lbl_solver_method = tk.Label(master=frame, text="Local Search Metaheuristic:")
-        lbl_solver_method.grid(column=0, row=0, sticky=tk.W, padx=5, pady=5)
+        lbl_solver_method.grid(column=0, row=0, sticky=tk.W, padx=10, pady=5)
 
         def on_solver_method_changed(*args):
             self.or_settings.solver_method = OR_SOLVER_METHODS_INV[var_solver_method.get()]
@@ -430,7 +556,11 @@ class SimulatorGUI:
 
 if __name__ == '__main__':
     root = tk.Tk(className='VRP Simulator')
-    root.geometry("600x300")
+    root.geometry("800x400")
+
+    with open(os.path.join(os.path.dirname(__file__), 'logging.yaml')) as file:
+        config = yaml.safe_load(file)
+        logging.config.dictConfig(config)
 
     simulator_gui = SimulatorGUI()
     simulator_gui.create_gui(root)

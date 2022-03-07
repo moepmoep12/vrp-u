@@ -1,4 +1,5 @@
 import sys
+import logging
 from numbers import Number
 from overrides import overrides
 from timeit import default_timer as timer
@@ -13,6 +14,8 @@ from vrpu.solver.solver import ISolver, SolvingSnapshot
 from vrpu.solver.solution_encoding import EncodedAction, EncodedSolution
 
 from vrpu.solver.genetic_algorithm.ga_solver import GASolverVRPDP, GASolverVRPDPU
+
+progress_logger = logging.getLogger('progress')
 
 
 class InitSolverCVRP(ISolver):
@@ -40,13 +43,13 @@ class InitSolverCVRP(ISolver):
 
         actions_inserted = [False] * len(self._actions)
         current_vehicle_idx = 0
-        current_vehicle = self._current_problem.vehicles[current_vehicle_idx]
         current_load = 0
 
         while not all(actions_inserted):
 
             action_to_insert_indices = self._choose_actions_to_insert(actions_inserted, current_vehicle_idx)
             for action_index in action_to_insert_indices:
+                current_vehicle = self._current_problem.vehicles[current_vehicle_idx]
                 encoded_action = EncodedAction(current_vehicle_idx, sum(actions_inserted))
                 self._current_solution[action_index] = encoded_action
 
@@ -55,7 +58,6 @@ class InitSolverCVRP(ISolver):
 
                 if current_load >= current_vehicle.max_capacity:
                     current_vehicle_idx += 1
-                    current_vehicle = self._current_problem.vehicles[current_vehicle_idx]
                     current_load = 0
 
         return self._current_solution
@@ -257,7 +259,9 @@ class LocalSolver(ISolver):
         self.iteration = 0
         self.steps_without_improvement = 0
 
-        print(f"-- Start Solving with initial value {best_value} and Greedy: {self.greedy} --")
+        logging.debug(f"Start Solving with initial value {best_value} and Greedy: {self.greedy}")
+
+        setup_time = timedelta(seconds=timer() - start_timer)
 
         while self.steps_without_improvement < self.neighborhood_gen.get_max_steps():
             self.iteration += 1
@@ -265,7 +269,8 @@ class LocalSolver(ISolver):
             # Keep track of stats
             self._history.append(
                 SolvingSnapshot(
-                    runtime=timedelta(seconds=timer() - start_timer),
+                    runtime=timedelta(seconds=timer() - start_timer) - setup_time,
+                    setup_time=setup_time,
                     step=self.iteration,
                     best_value=best_value,
                     average=best_value,
@@ -289,9 +294,10 @@ class LocalSolver(ISolver):
                 self.steps_without_improvement += 1
                 self.step += 1
 
-            print(f"\r   Iteration: {self.iteration}, Best value: {best_value}", end='')
+            progress_logger.debug(f"\r   Iteration: {self.iteration}, Best value: {best_value}")
 
-        print(f"\n-- End of solving after {timer() - start_timer}s --")
+        progress_logger.debug("\n\r")
+        logging.debug(f"End of solving after {timer() - start_timer}s")
 
         return self.best_solution
 

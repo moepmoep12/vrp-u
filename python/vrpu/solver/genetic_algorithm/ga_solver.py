@@ -1,4 +1,5 @@
 import random
+import logging
 from datetime import timedelta
 from operator import itemgetter
 from typing import List, Tuple, Dict
@@ -20,6 +21,8 @@ SELECTION_FCT_NAME = 'Selection'
 RECOMBINE_FCT_NAME = 'Recombine'
 MUTATE_FCT_NAME = 'Mutate'
 
+progress_logger = logging.getLogger('progress')
+
 
 class GASolverCVRP(ISolver):
 
@@ -37,6 +40,7 @@ class GASolverCVRP(ISolver):
         self._best_individual = None
 
     def solve(self, problem: VRPProblem) -> Solution:
+        start_timer = timer()
         self._current_problem = problem
 
         self._actions = self._create_actions()
@@ -44,6 +48,10 @@ class GASolverCVRP(ISolver):
         self._setup_node_distance_function()
 
         # create classes in DEAP
+        if getattr(creator, FITNESS_FCT_NAME, None):
+            del creator.FitnessMax
+        if getattr(creator, INDIVIDUAL_NAME, None):
+            del creator.Individual
         creator.create(FITNESS_FCT_NAME, base.Fitness, weights=(1.0, -1.0))
         creator.create(INDIVIDUAL_NAME, list, fitness=getattr(creator, FITNESS_FCT_NAME))
 
@@ -67,20 +75,21 @@ class GASolverCVRP(ISolver):
         # # initialize population
         population = getattr(toolbox, POPULATION_NAME)(n=self.population_size)
 
-        print('Start of evolution')
+        logging.debug('Start of evolution')
         # Evaluate the entire population
         fitnesses = list(map(getattr(toolbox, EVALUATION_FCT_NAME), population))
         for ind, fit in zip(population, fitnesses):
             ind.fitness.values = fit
-        print(f"   Evaluated {len(population)} individuals")
+        logging.debug(f"   Evaluated {len(population)} individuals")
 
         # Remember best individual
         best_ind = tools.selBest(population, 1)[0]
         self._best_individual = best_ind
         values = [ind.fitness.values[1] for ind in population]
-        start_timer = timer()
+        setup_time = timedelta(seconds=timer() - start_timer)
         self._history.append(
-            SolvingSnapshot(runtime=timedelta(seconds=timer() - start_timer),
+            SolvingSnapshot(runtime=timedelta(seconds=timer() - start_timer) - setup_time,
+                            setup_time=setup_time,
                             step=0,
                             best_value=best_ind.fitness.values[1],
                             average=sum(values) / len(values),
@@ -122,20 +131,21 @@ class GASolverCVRP(ISolver):
             best_ind = tools.selBest(population, 1)[0]
             if best_ind.fitness.values[0] > self._best_individual.fitness.values[0]:
                 self._best_individual = best_ind
-            print(f"\r   Generation {generation + 1}/{self.generations}"
-                  f"   Best Fitness: {best_ind.fitness.values}", end='')
+            progress_logger.debug(f"Generation {generation + 1}/{self.generations}"
+                                  f"   Best Fitness: {best_ind.fitness.values}")
 
             # Keep track of stats
             values = [ind.fitness.values[1] for ind in population]
             self._history.append(
-                SolvingSnapshot(runtime=timedelta(seconds=timer() - start_timer),
+                SolvingSnapshot(runtime=timedelta(seconds=timer() - start_timer) - setup_time,
+                                setup_time=setup_time,
                                 step=generation + 1,
                                 best_value=best_ind.fitness.values[1],
                                 average=sum(values) / len(values),
                                 min_value=min(values),
                                 max_value=max(values)))
 
-        print(f"\n-- End of (successful) evolution after {timer() - start_timer}s --")
+        logging.debug(f"-- End of (successful) evolution after {timer() - start_timer}s --")
 
         return self._individual_to_solution(self._best_individual)
 

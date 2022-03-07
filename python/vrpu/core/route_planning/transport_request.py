@@ -80,12 +80,3 @@ class TransportRequest(Clonable, Serializable):
                f" {self.from_node} -> {self.to_node} |" \
                f" Q:{self.quantity}x |" \
                f" D:{self.due_date} }}"
-
-
-class TransportRequestEncoder(json.JSONEncoder):
-    def default(self, o: TransportRequest):
-
-        if isinstance(o, Serializable):
-            return o.serialize()
-        else:
-            return {'__{}__'.format(o.__class__.__name__): o.__dict__} if hasattr(o, '__dict__') else str(o)

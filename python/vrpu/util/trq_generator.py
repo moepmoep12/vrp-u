@@ -1,9 +1,10 @@
 import random
+import logging
 from datetime import datetime
 from abc import ABC, abstractmethod
-from overrides import overrides
 
 from vrpu.core import Graph, TransportRequest
+from vrpu.core.graph.search import astar
 
 
 class ITransportRequestGenerator(ABC):
@@ -30,7 +31,7 @@ class ITransportRequestGenerator(ABC):
 
 
 class RandomTransportRequestGenerator(ITransportRequestGenerator):
-    @overrides
+
     def generate_transport_requests(self, graph: Graph,
                                     count: int,
                                     depot: str,
@@ -47,8 +48,13 @@ class RandomTransportRequestGenerator(ITransportRequestGenerator):
             available_nodes = available_nodes - direct_neighbors
             to_node = random.choice(list(available_nodes))
 
-            trq = TransportRequest(str(i), from_node, to_node, datetime(2000, 1, 1), 1)
-            result.append(trq)
+            search_result = astar.search(graph.get_node(from_node), lambda g: g.uid == to_node, lambda n: 0)
+            if not search_result or len(search_result.path) == 0:
+                i -= 1
+                logging.debug(f"No path from {from_node} to {to_node}")
+            else:
+                trq = TransportRequest(str(i), from_node, to_node, datetime(2000, 1, 1), 1)
+                result.append(trq)
 
             forbidden_nodes.add(from_node)
             forbidden_nodes.add(to_node)

@@ -1,4 +1,3 @@
-import json
 import random
 from typing import Dict, Generic, Tuple
 from overrides import overrides
@@ -222,12 +221,3 @@ class GridGraph(Graph):
                     self.add_edge(data=f"{neighbor_right_uid}->{from_uid}", from_uid=neighbor_right_uid,
                                   to_uid=from_uid,
                                   cost=cost)
-
-
-class GraphEncoder(json.JSONEncoder):
-    def default(self, o: Graph):
-
-        if isinstance(o, Serializable):
-            return o.serialize()
-        else:
-            return {'__{}__'.format(o.__class__.__name__): o.__dict__} if hasattr(o, '__dict__') else str(o)

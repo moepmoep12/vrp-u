@@ -1,4 +1,5 @@
 import random
+import logging
 from abc import ABC, abstractmethod
 from overrides import overrides
 
@@ -114,10 +115,10 @@ class RandomGridGraphGenerator(IGraphGenerator):
 
             for u_node in unreachable_nodes:
                 node = u_node.split('->')[1]
-                print(f"Removing unreachable node {u_node}")
+                logging.debug(f"Removing unreachable node {u_node}")
                 graph.remove_node(node)
 
-        print(f"Removed {orig_node_count - len(graph.nodes)} nodes")
-        print(f"Removed {orig_edge_count - len(graph.edges)} edges")
+        logging.debug(f"Removed {orig_node_count - len(graph.nodes)} nodes")
+        logging.debug(f"Removed {orig_edge_count - len(graph.edges)} edges")
 
         return graph

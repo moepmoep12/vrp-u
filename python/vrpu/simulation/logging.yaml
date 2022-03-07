@@ -1,0 +1,50 @@
+version: 1
+
+formatters:
+  simple:
+    format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    datefmt: '%d/%m/%Y %I:%M:%S %p'
+
+  clean:
+    format: "%(message)s"
+
+handlers:
+  console:
+    class: logging.StreamHandler
+    level: DEBUG
+    formatter: simple
+    stream: ext://sys.stdout
+
+  console_progress:
+    class: logging.StreamHandler
+    level: DEBUG
+    formatter: clean
+    stream: ext://sys.stdout
+    .:
+      terminator: ''
+
+  console_clean:
+    class: logging.StreamHandler
+    level: DEBUG
+    formatter: clean
+    stream: ext://sys.stdout
+
+root:
+  level: DEBUG
+  handlers: [console]
+
+loggers:
+  progress:
+    level: DEBUG
+    handlers: [console_progress]
+    propagate: no
+
+  simulator:
+    level: DEBUG
+    handlers: [console]
+    propagate: no
+
+  clean:
+    level: DEBUG
+    handlers: [console_clean]
+    propagate: no

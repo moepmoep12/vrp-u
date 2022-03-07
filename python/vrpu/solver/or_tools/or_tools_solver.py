@@ -1,3 +1,4 @@
+import logging
 from dataclasses import dataclass
 from typing import List
 from datetime import timedelta, datetime
@@ -50,17 +51,15 @@ class SolverCVRP(ISolver):
 
     @overrides
     def solve(self, problem: VRPProblem) -> Solution:
+        start_timer = timer()
         self._current_problem = problem
         self._vehicles = problem.vehicles
 
         if not self._vehicles:
             return
-        print(f"\nPlanning with vehicles: ")
-        for v in self._vehicles:
-            print(f"  {v}")
 
         self._actions = self._create_actions()
-        print(f"\nSolving with {len(self._actions)} actions\n")
+        logging.debug(f"Solving with {len(self._actions)} actions")
 
         # Setup node distance function
         self._node_distance.calculate_distances(self._graph, set([a.node for a in self._actions]))
@@ -91,21 +90,22 @@ class SolverCVRP(ISolver):
         # Initial Solution strategy
         search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PARALLEL_CHEAPEST_INSERTION
 
-        start_timer = timer()
+        setup_time = timedelta(seconds=timer() - start_timer)
 
         # Start solving
         self._assignment = self._routing_model.SolveWithParameters(search_parameters)
 
         if not self._assignment:
-            print("Failed to solve...")
+            logging.debug("Failed to solve...")
             return
 
         self._solution = self._create_solution()
 
-        runtime = timedelta(seconds=timer() - start_timer)
+        runtime = timedelta(seconds=timer() - start_timer) - setup_time
         value = sum([t.get_distance() for t in self._solution.tours])
         self._history.append(SolvingSnapshot(
             runtime=runtime,
+            setup_time=setup_time,
             step=1,
             best_value=value,
             average=value,
@@ -113,8 +113,8 @@ class SolverCVRP(ISolver):
             max_value=value
         ))
 
-        print(
-            f"\nFound solution with objective value {self.assignment.ObjectiveValue()} after {timer() - start_timer}s\n")
+        logging.debug(
+            f"Found solution with objective value {self.assignment.ObjectiveValue()} after {timer() - start_timer}s")
 
         return self._solution
 
