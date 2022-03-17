@@ -115,6 +115,10 @@ class UTurnGraph(Graph):
     def base_graph(self) -> Graph[NodeData, EdgeData]:
         return self._base_graph
 
+    @property
+    def distances(self):
+        return self.base_graph.distances
+
     def _create_graph(self):
         unexplored_states = []
 

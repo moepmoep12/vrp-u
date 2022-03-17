@@ -1,5 +1,6 @@
 import random
-from typing import Dict, Generic, Tuple
+from dataclasses import dataclass
+from typing import Dict, Generic, Tuple, List
 from overrides import overrides
 
 from .node import Node, NodeData
@@ -7,6 +8,15 @@ from .edge import Edge, EdgeData
 from vrpu.core.route_planning.serializable import Serializable
 
 UID = str
+
+
+@dataclass
+class Distance:
+    from_node: UID = ''
+    to_node: UID = ''
+    distance: int = 0
+    path: List = None
+    reachable: bool = True
 
 
 class Graph(Generic[NodeData, EdgeData], Serializable):
@@ -22,6 +32,7 @@ class Graph(Generic[NodeData, EdgeData], Serializable):
         """
         self._nodes = nodes if nodes is not None else dict()
         self._edges = edges if edges is not None else dict()
+        self._distances: [Dict[UID, Dict[UID, Distance]]] = dict()
 
     @property
     def nodes(self) -> Dict[UID, Node[NodeData, EdgeData]]:
@@ -30,6 +41,10 @@ class Graph(Generic[NodeData, EdgeData], Serializable):
     @property
     def edges(self) -> Dict[Edge[EdgeData], Tuple[Node, Node]]:
         return self._edges
+
+    @property
+    def distances(self) -> [Dict[UID, Dict[UID, Distance]]]:
+        return self._distances
 
     def get_node(self, node_uid: UID) -> Node[NodeData, EdgeData]:
         """
@@ -156,7 +171,8 @@ class Graph(Generic[NodeData, EdgeData], Serializable):
             )
         return dict(
             nodes=list(self.nodes.values()),
-            edges=edges
+            edges=edges,
+            distances=self.distances
         )
 
     @staticmethod
@@ -169,6 +185,18 @@ class Graph(Generic[NodeData, EdgeData], Serializable):
         for edge in data['edges']:
             edge_data = f"{edge['from_node']}->{edge['to_node']}"
             graph.add_edge(edge_data, edge['from_node'], edge['to_node'], edge['cost'])
+
+        if 'distances' in data:
+            distances: [Dict[UID, Dict[UID, Distance]]] = dict()
+            for from_node in data['distances'].keys():
+                from_node_dict = dict()
+
+                for to_node, distance_dict in data['distances'][from_node].items():
+                    from_node_dict[to_node] = Distance(**distance_dict['__Distance__'])
+
+                distances[from_node] = from_node_dict
+
+            graph._distances = distances
 
         return graph
 

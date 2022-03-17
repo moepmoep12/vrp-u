@@ -1,19 +1,22 @@
 import sys
 import logging
+import random
+from dataclasses import dataclass
 from numbers import Number
+from typing import Tuple, Union
+
 from overrides import overrides
 from timeit import default_timer as timer
 from datetime import timedelta
 
-from vrpu.core import VRPProblem, Solution, Delivery, DeliveryUTurnState, Vehicle
+from vrpu.core import VRPProblem, Solution, Delivery, DeliveryUTurnState, Vehicle, TransportAction, PickUp, \
+    PickUpUTurnState
 from vrpu.core.graph.search.node_distance import CachedNodeDistance
 
 from vrpu.solver.local.neighborhood import INeighborhoodGenerator, Neighbor
 from vrpu.solver.local.objective import IObjectiveFunction
 from vrpu.solver.solver import ISolver, SolvingSnapshot
 from vrpu.solver.solution_encoding import EncodedAction, EncodedSolution
-
-from vrpu.solver.genetic_algorithm.ga_solver import GASolverVRPDP, GASolverVRPDPU
 
 progress_logger = logging.getLogger('progress')
 
@@ -31,6 +34,7 @@ class InitSolverCVRP(ISolver):
 
     @overrides
     def solve(self, problem: VRPProblem) -> Solution:
+        start_timer = timer()
         self._current_problem = problem
         self._actions = self._create_actions()
         self._setup_node_distance_function()
@@ -43,30 +47,40 @@ class InitSolverCVRP(ISolver):
 
         actions_inserted = [False] * len(self._actions)
         current_vehicle_idx = 0
-        current_load = 0
+
+        setup_time = timedelta(seconds=timer() - start_timer)
+
+        logging.debug('Starting initial solution...')
 
         while not all(actions_inserted):
-
+            progress_logger.debug(f"\r Inserted {sum(actions_inserted)}/{len(actions_inserted)}")
             action_to_insert_indices = self._choose_actions_to_insert(actions_inserted, current_vehicle_idx)
-            for action_index in action_to_insert_indices:
-                current_vehicle = self._current_problem.vehicles[current_vehicle_idx]
-                encoded_action = EncodedAction(current_vehicle_idx, sum(actions_inserted))
+            current_vehicle = self._current_problem.vehicles[current_vehicle_idx]
+            for action_index, value in action_to_insert_indices:
+                encoded_action = EncodedAction(current_vehicle_idx, value)
                 self._current_solution[action_index] = encoded_action
-
-                current_load += 1
                 actions_inserted[action_index] = True
 
-                if current_load >= current_vehicle.max_capacity:
-                    current_vehicle_idx += 1
-                    current_load = 0
+            max_loads = self._current_solution.get_max_loads()
+            if max_loads[current_vehicle_idx] >= current_vehicle.max_capacity:
+                current_vehicle_idx += 1
 
+        runtime = timedelta(seconds=timer() - start_timer) - setup_time
+        self._history.append(SolvingSnapshot(runtime=runtime,
+                                             setup_time=setup_time,
+                                             step=0,
+                                             best_value=0,
+                                             average=0,
+                                             min_value=0,
+                                             max_value=0))
+        progress_logger.debug("\n\r")
         return self._current_solution
 
     @property
     def history(self) -> [SolvingSnapshot]:
         return self._history
 
-    def _create_actions(self):
+    def _create_actions(self) -> [TransportAction]:
         """
         :return: All actions for the current problem.
         """
@@ -74,7 +88,7 @@ class InitSolverCVRP(ISolver):
         deliveries = [Delivery(trq, delivery_duration) for trq in self._current_problem.transport_requests]
         return [*deliveries]
 
-    def _setup_node_distance_function(self):
+    def _setup_node_distance_function(self) -> None:
         """
         Sets up the node distance function to pre-calculate needed distances.
         """
@@ -83,10 +97,10 @@ class InitSolverCVRP(ISolver):
         nodes = set(nodes)
         self._node_distance.calculate_distances(self._graph, nodes)
 
-    def _get_start_node_for_vehicle(self, vehicle: Vehicle):
+    def _get_start_node_for_vehicle(self, vehicle: Vehicle) -> str:
         return vehicle.current_node
 
-    def _choose_actions_to_insert(self, actions_inserted: [bool], vehicle_index: int) -> [int]:
+    def _choose_actions_to_insert(self, actions_inserted: [bool], vehicle_index: int) -> [Tuple[int, int]]:
         best_action_index = 0
         best_value = sys.maxsize
 
@@ -96,35 +110,139 @@ class InitSolverCVRP(ISolver):
 
             # simulate the action being inserted and calculate the resulting total distance of the solution
             clone = self._current_solution.clone()
-            clone[i] = EncodedAction(vehicle_index, sum(actions_inserted))
+            clone[i] = EncodedAction(vehicle_index, sum(actions_inserted) * 10)
 
             distance = sum(t.get_distance() for t in clone.tours)
             if distance < best_value:
                 best_action_index = i
                 best_value = distance
 
-        return [best_action_index]
+        return [(best_action_index, sum(actions_inserted) * 10)]
 
 
-class InitSolverVRPDP(GASolverVRPDP):
+class InitSolverVRPDP(InitSolverCVRP):
 
-    @overrides
-    def solve(self, problem: VRPProblem) -> Solution:
-        self._current_problem = problem
-        self._actions = self._create_actions()
-        self._setup_node_distance_function()
-        individual = self._init_individual()
+    def _create_actions(self) -> [TransportAction]:
+        """
+        :return: All actions for the current problem.
+        """
+        actions = []
 
-        return EncodedSolution([EncodedAction(a[0], a[1]) for a in individual], self._actions,
-                               self._current_problem.vehicles,
-                               [self._get_start_node_for_vehicle(v) for v in self._current_problem.vehicles],
-                               self._node_distance)
+        for trq in self._current_problem.transport_requests:
+            actions.append(PickUp(trq, self._current_problem.pick_duration))
+            actions.append(Delivery(trq, self._current_problem.delivery_duration))
+
+        return actions
+
+    def _choose_actions_to_insert(self, actions_inserted: [bool], vehicle_index: int) -> [Tuple[int, int]]:
+        best_distances = []
+        max_actions_to_test = 20
+        # if that many actions are already present in a tour, than only a subset of possible positions will be tested
+        action_inserted_threshold = 50
+        # how many positions for the pickup action will be tried
+        max_pickup_pos = 7
+        # how many different positions for the delivery will be tried
+        # the total amount of tries is max_pickup_pos * max_delivery_pos
+        max_delivery_pos = 7
+
+        @dataclass
+        class PDDistance:
+            pickup_index: int
+            delivery_index: int
+            value_pickup: int
+            value_delivery: int
+            distance: Number
+            solution: EncodedSolution
+
+        # gather all actions (indices) that are not yet inserted
+        actions_to_test = [(i, i + 1) for i in range(0, len(actions_inserted) - 1, 2) if not actions_inserted[i]]
+        if len(actions_to_test) > max_actions_to_test:
+            actions_to_test = random.sample(max_actions_to_test)
+
+        # go through all actions not already inserted
+        for p_idx, d_idx in actions_to_test:
+
+            pd_distance = PDDistance(p_idx, d_idx, 0, 10, sys.maxsize, None)
+            best_distances.append(pd_distance)
+
+            # gather all possible values for the pickup action
+            possible_values = [e.value for e in self._current_solution if
+                               e is not None and e.vehicle_index == vehicle_index]
+            if len(possible_values) > 0:
+                # allows insertion at tour end
+                possible_values.append(max(possible_values) + 1)
+            else:
+                possible_values.append(1)
+
+            if sum(actions_inserted) > action_inserted_threshold and len(possible_values) > max_pickup_pos:
+                possible_values = random.sample(possible_values, max_pickup_pos)
+
+            # go through all possible values (positions) for the pickup action
+            for pick_value in possible_values:
+                clone_p = self._current_solution.clone()
+                # simulate the pickup action being in the tour
+                clone_p[p_idx] = EncodedAction(vehicle_index, pick_value)
+
+                # order is disturbed by insertion of the pickup action -> restore it
+                for j, encoded_action in enumerate(clone_p):
+                    if j == p_idx:
+                        continue
+                    if encoded_action is None:
+                        continue
+                    if encoded_action.value >= pick_value:
+                        encoded_action.value += 1
+
+                # gather possible values for delivery action
+                possible_values = [e.value for e in clone_p if
+                                   e is not None and e.vehicle_index == vehicle_index and e.value > pick_value]
+                if len(possible_values) > 0:
+                    # allows insertion at tour end
+                    possible_values.append(max(possible_values) + 1)
+                else:
+                    possible_values.append(2)
+
+                if sum(actions_inserted) > action_inserted_threshold and len(possible_values) > max_delivery_pos:
+                    possible_values = random.sample(possible_values, max_delivery_pos)
+
+                # go through all possible positions for the delivery (that is after the pickup)
+                for delivery_value in possible_values:
+                    clone_d = clone_p.clone()
+                    # simulate the delivery being in the tour, too
+                    clone_d[d_idx] = EncodedAction(vehicle_index, delivery_value)
+
+                    # order is disturbed by insertion of the pickup action -> restore it
+                    for j, encoded_action in enumerate(clone_d):
+                        if j == d_idx:
+                            continue
+                        if encoded_action is None:
+                            continue
+                        if encoded_action.value >= delivery_value:
+                            encoded_action.value += 1
+
+                    # check capacity
+                    max_loads = clone_d.get_max_loads()
+                    if max_loads[vehicle_index] > self._current_problem.vehicles[vehicle_index].max_capacity:
+                        continue
+
+                    distance = sum(t.get_distance() for t in clone_d.tours)
+                    if distance < pd_distance.distance:
+                        pd_distance.distance = distance
+                        pd_distance.value_pickup = pick_value
+                        pd_distance.value_delivery = delivery_value
+                        pd_distance.solution = clone_d
+
+        best_distances = sorted(best_distances, key=lambda pd: pd.distance)
+        best_pd = best_distances[0]
+        for orig, changed in zip(self._current_solution, best_pd.solution):
+            if orig is not None and changed is not None:
+                orig.value = changed.value
+        return [(best_pd.pickup_index, best_pd.value_pickup), (best_pd.delivery_index, best_pd.value_delivery)]
 
 
 class InitSolverCVRPU(InitSolverCVRP):
 
     @overrides
-    def _setup_node_distance_function(self):
+    def _setup_node_distance_function(self) -> None:
         """
         Sets up the node distance function to pre-calculate needed distances.
         """
@@ -150,7 +268,7 @@ class InitSolverCVRPU(InitSolverCVRP):
 
         return actions
 
-    def _get_possible_state_nodes(self, current_node: str):
+    def _get_possible_state_nodes(self, current_node: str) -> [str]:
         """
         Returns possible states for a specific node.
         :param current_node: UID of a node.
@@ -165,7 +283,7 @@ class InitSolverCVRPU(InitSolverCVRP):
         return result
 
     @overrides
-    def _get_start_node_for_vehicle(self, vehicle: Vehicle):
+    def _get_start_node_for_vehicle(self, vehicle: Vehicle) -> str:
         if vehicle.node_arriving_from:
             for uid, node in self._graph.nodes.items():
                 if node.data.current_node == vehicle.current_node \
@@ -177,53 +295,110 @@ class InitSolverCVRPU(InitSolverCVRP):
             return self._get_possible_state_nodes(vehicle.current_node)[0]
 
 
-class InitSolverVRPDPU(GASolverVRPDPU):
-    def _init_individual(self):
-        keys = []
-        vehicle_index = 0
-
-        for i in range(len(self._current_problem.transport_requests)):
-            vehicle = self._current_problem.vehicles[vehicle_index]
-            pick_value = self._generate_value([key[1] for key in keys], 1, 800)
-            keys.append((vehicle_index, pick_value))
-            delivery_value = self._generate_value([key[1] for key in keys], pick_value + 1, 999)
-            keys.append((vehicle_index, delivery_value))
-
-            max_loads = self._get_max_load(keys)
-            if max_loads[vehicle_index] == vehicle.max_capacity:
-                vehicle_index += 1
-
-        return keys
-
-    def _individual_to_actions(self, individual: []):
+class InitSolverVRPDPU(InitSolverCVRPU):
+    def _create_actions(self) -> [[Union[PickUpUTurnState, DeliveryUTurnState]]]:
         """
-        Transforms an individual to a dict containing the ordered list of actions assigned to each vehicle.
-        :param individual: The individual to transform.
-        :return: A dict containing the ordered list of actions assigned to each vehicle.
+        :return: All actions for the current problem.
+        Every Delivery can be executed with one of many DeliveryUTurnStates.
         """
-        actions = dict()
-        [actions.setdefault(i, []) for i in range(len(self._current_problem.vehicles))]
+        actions = []
 
-        for action_index, (vehicle_index, value) in enumerate(individual):
-            actions[vehicle_index].append((self._actions[action_index], value))
-
-        # sort actions for each vehicle according to their value
-        for vehicle_index, action_list in actions.items():
-            actions[vehicle_index] = [a[0] for a in sorted(action_list, key=lambda x: x[1])]
+        for i, trq in enumerate(self._current_problem.transport_requests):
+            actions.append(
+                [PickUpUTurnState(trq, i, node_state, self._current_problem.pick_duration)
+                 for node_state in self._get_possible_state_nodes(trq.from_node)])
+            actions.append(
+                [DeliveryUTurnState(trq, i, node_state, self._current_problem.delivery_duration)
+                 for node_state in self._get_possible_state_nodes(trq.to_node)])
 
         return actions
 
-    @overrides
-    def solve(self, problem: VRPProblem) -> Solution:
-        self._current_problem = problem
-        self._actions = self._create_actions()
-        self._setup_node_distance_function()
-        individual = self._init_individual()
+    def _choose_actions_to_insert(self, actions_inserted: [bool], vehicle_index: int) -> [Tuple[int, int]]:
+        best_distances = []
 
-        return EncodedSolution([EncodedAction(a[0], a[1]) for a in individual], self._actions,
-                               self._current_problem.vehicles,
-                               [self._get_start_node_for_vehicle(v) for v in self._current_problem.vehicles],
-                               self._node_distance)
+        @dataclass
+        class PDDistance:
+            pickup_index: int
+            delivery_index: int
+            value_pickup: int
+            value_delivery: int
+            distance: Number
+            solution: EncodedSolution
+
+        # go through all actions not already inserted
+        for i in range(0, len(actions_inserted) - 1, 2):
+            if actions_inserted[i]:
+                continue
+
+            pd_distance = PDDistance(i, i + 1, 0, 10, sys.maxsize, None)
+            best_distances.append(pd_distance)
+
+            # gather all possible values for the pickup action
+            possible_values = [e.value for e in self._current_solution if
+                               e is not None and e.vehicle_index == vehicle_index]
+            if len(possible_values) > 0:
+                # allows insertion at tour end
+                possible_values.append(max(possible_values) + 1)
+            else:
+                possible_values.append(1)
+
+            # go through all possible values (positions) for the pickup action
+            for pick_value in possible_values:
+                clone_p = self._current_solution.clone()
+                # simulate the pickup action being in the tour
+                clone_p[i] = EncodedAction(vehicle_index, pick_value)
+
+                # order is disturbed by insertion of the pickup action -> restore it
+                for j, encoded_action in enumerate(clone_p):
+                    if j == i:
+                        continue
+                    if encoded_action is None:
+                        continue
+                    if encoded_action.value >= pick_value:
+                        encoded_action.value += 1
+
+                # gather possible values for delivery action
+                possible_values = [e.value for e in clone_p if
+                                   e is not None and e.vehicle_index == vehicle_index and e.value > pick_value]
+                if len(possible_values) > 0:
+                    # allows insertion at tour end
+                    possible_values.append(max(possible_values) + 1)
+                else:
+                    possible_values.append(2)
+
+                # go through all possible positions for the delivery (that is after the pickup)
+                for delivery_value in possible_values:
+                    clone_d = clone_p.clone()
+                    # simulate the delivery being in the tour, too
+                    clone_d[i + 1] = EncodedAction(vehicle_index, delivery_value)
+
+                    # order is disturbed by insertion of the pickup action -> restore it
+                    for j, encoded_action in enumerate(clone_d):
+                        if j == i + 1:
+                            continue
+                        if encoded_action is None:
+                            continue
+                        if encoded_action.value >= delivery_value:
+                            encoded_action.value += 1
+
+                    # check capacity
+                    max_loads = clone_d.get_max_loads()
+                    if max_loads[vehicle_index] > self._current_problem.vehicles[vehicle_index].max_capacity:
+                        continue
+
+                    distance = sum(t.get_distance() for t in clone_d.tours)
+                    if distance < pd_distance.distance:
+                        pd_distance.distance = distance
+                        pd_distance.value_pickup = pick_value
+                        pd_distance.value_delivery = delivery_value
+                        pd_distance.solution = clone_d
+
+        best_distances = sorted(best_distances, key=lambda pd: pd.distance)
+        best_pd = best_distances[0]
+        for orig, changed in zip(self._current_solution, best_pd.solution):
+            if orig is not None and changed is not None:
+                orig.value = changed.value
+        return [(best_pd.pickup_index, best_pd.value_pickup), (best_pd.delivery_index, best_pd.value_delivery)]
 
 
 class LocalSolver(ISolver):
@@ -260,8 +435,8 @@ class LocalSolver(ISolver):
         self.steps_without_improvement = 0
 
         logging.debug(f"Start Solving with initial value {best_value} and Greedy: {self.greedy}")
-
-        setup_time = timedelta(seconds=timer() - start_timer)
+        init_runtime = self.init_solver.history[-1].runtime
+        setup_time = timedelta(seconds=timer() - start_timer) - init_runtime
 
         while self.steps_without_improvement < self.neighborhood_gen.get_max_steps():
             self.iteration += 1
@@ -269,7 +444,7 @@ class LocalSolver(ISolver):
             # Keep track of stats
             self._history.append(
                 SolvingSnapshot(
-                    runtime=timedelta(seconds=timer() - start_timer) - setup_time,
+                    runtime=timedelta(seconds=timer() - start_timer) - setup_time + init_runtime,
                     setup_time=setup_time,
                     step=self.iteration,
                     best_value=best_value,

@@ -1,10 +1,16 @@
 import json
+import os
 import re
 import logging
+import logging.config
 from tkinter import Tk, ttk, RAISED, Label, IntVar, Entry, W, DoubleVar, BooleanVar, Checkbutton, Button, filedialog, \
     X, StringVar, SUNKEN
 
+import yaml
+
+from vrpu.core import UTurnTransitionFunction, UTurnGraph
 from vrpu.core.graph.graph import Graph
+from vrpu.core.graph.search import NodeDistanceDijkstra
 from vrpu.core.route_planning.serializable import JSONSerializer
 from vrpu.util import RandomGridGraphGenerator, RandomTransportRequestGenerator
 from vrpu.visualization import GraphRenderer
@@ -210,30 +216,87 @@ class ProblemCreatorGUI:
 
         settings_frame.pack(fill=X)
 
+        # graph frame
+        graph_frame = ttk.Frame(master=root, relief=RAISED, borderwidth=1)
+        graph_frame.columnconfigure(0, weight=1)
+        graph_frame.columnconfigure(1, weight=3)
+        graph_frame.columnconfigure(2, weight=1)
+
+        label_path = Label(master=graph_frame, text="Graph")
+        label_path.grid(column=0, row=0, sticky=W, padx=10)
+
+        label_path_chosen = Label(master=graph_frame, text="....", relief=SUNKEN, width=45)
+        label_path_chosen.grid(column=1, row=0, sticky=W)
+
+        def on_choose_graph_clicked():
+            filename = filedialog.askopenfilename(defaultextension='.json', filetypes=[("json files", '*.json')])
+            if not filename:
+                return
+            label_path_chosen['text'] = filename
+            self.chosen_graph_path = filename
+            with open(filename) as f:
+                self.created_graph = Graph.from_json(json.load(f))
+
+        btn_choose = Button(master=graph_frame, text="Choose graph", relief=RAISED,
+                            command=on_choose_graph_clicked)
+        btn_choose.grid(column=2, row=0, padx=10, sticky=W)
+
+        graph_frame.pack(fill=X)
+
         # create frame
         run_frame = ttk.Frame(master=root, relief=RAISED, borderwidth=1)
 
         create_btn = Button(run_frame, text='Create Graph', command=self._create_graph, height=4, width=20)
         create_btn.grid(column=0, row=0, sticky=W, padx=10)
 
+        def on_show_graph():
+            if not self.created_graph:
+                return
+            GraphRenderer().render_graph(self.created_graph)
+
+        btn_show_graph = Button(master=run_frame, text="Show graph",
+                                command=on_show_graph, height=4, width=20)
+        btn_show_graph.grid(column=1, row=0, padx=10, sticky=W)
+
+        def on_calc_distances():
+            if not self.created_graph:
+                return
+
+            node_dist_fct = NodeDistanceDijkstra(dict())
+            logging.info('Calculating normal node distances...')
+            node_dist_fct.calculate_distances(self.created_graph)
+
+            u_graph = UTurnGraph(UTurnTransitionFunction(self.created_graph), self.created_graph)
+            node_dist_fct.calculate_distances(u_graph)
+
+            setattr(self.created_graph, '_distances', node_dist_fct.distance_dict)
+
+        btn_calc_distances = Button(master=run_frame, text="Calculate Distances",
+                                    command=on_calc_distances, height=4, width=20)
+        btn_calc_distances.grid(column=1, row=0, padx=10, sticky=W)
+
         def save_graph():
 
             if not self.created_graph:
                 return
 
-            directory = filedialog.askdirectory()
-            if not directory:
-                return
+            if not self.chosen_graph_path:
+                directory = filedialog.askdirectory()
+                if not directory:
+                    return
 
-            graph_name = f"{self.size_x.get()}x{self.size_y.get()}"
-            graph_path = f"{directory}/{graph_name}.json"
+                graph_name = f"{self.size_x.get()}x{self.size_y.get()}"
+                graph_path = f"{directory}/{graph_name}.json"
+            else:
+                graph_path = self.chosen_graph_path
+
             with open(graph_path, 'w') as file:
                 serialized = json.dumps(self.created_graph, indent=4, cls=JSONSerializer)
                 file.write(serialized)
                 logger.info(f"Saved graph {graph_path}")
 
         save_btn = Button(run_frame, text='Save Graph', command=save_graph, height=4, width=20)
-        save_btn.grid(column=1, row=0, sticky=W, padx=10)
+        save_btn.grid(column=2, row=0, sticky=W, padx=10)
 
         run_frame.pack(fill=X)
 
@@ -266,6 +329,10 @@ class ProblemCreatorGUI:
 if __name__ == '__main__':
     root = Tk(className='Problem Creator')
     root.geometry("600x400")
+
+    with open(os.path.join(os.path.dirname(__file__), 'logging.yaml')) as file:
+        config = yaml.safe_load(file)
+        logging.config.dictConfig(config)
 
     simulator_gui = ProblemCreatorGUI()
     simulator_gui.create_gui(root)

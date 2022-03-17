@@ -54,6 +54,7 @@ class SimulatorGUI:
 
     def __init__(self):
         self.scenario_path = ''
+        self.loaded_graphs = dict()
         self.problem_type = PROBLEM_TYPES[0]
         self.solver_type = SOLVER_TYPES[0]
         self.solver_sub_frames = dict()
@@ -123,40 +124,23 @@ class SimulatorGUI:
                 logger.info(f"   {entry}")
 
     def _run_all(self):
-        data_root_path = f"../../../data/scenarios/cvrp"
-        solver_types = [self.solver_type]
-        problem_types = [self.problem_type]
+        data_root_path = f"../../../data/scenarios/"
         logging.disable(logging.DEBUG)
 
-        for i, solver_type in enumerate(solver_types):
-            self.solver_type = solver_type
+        if self.problem_type == PROBLEM_TYPES[0] or self.problem_type == PROBLEM_TYPES[1]:
+            data_root_path += "cvrp"
+        else:
+            data_root_path += "vrpdp"
 
-            for j, problem_type in enumerate(problem_types):
-                self.problem_type = problem_type
+        for path, dirs, files in os.walk(os.path.abspath(data_root_path)):
+            for k, file_name in enumerate(files):
+                progress_logger.info(f"\rSolver '{self.solver_type}'  "
+                                     f"Problem type '{self.problem_type}'  "
+                                     f"File '{file_name}' {k + 1}/{len(files)}")
+                self.scenario_path = os.path.join(path, file_name)
 
-                for path, dirs, files in os.walk(os.path.abspath(data_root_path)):
-                    for k, file_name in enumerate(files):
-                        progress_logger.info(f"\rSolver {solver_type} {i + 1}/{len(solver_types)}  "
-                                             f"Problem type {problem_type} {j + 1}/{len(problem_types)}  "
-                                             f"File {file_name} {k + 1}/{len(files)}")
-                        self.scenario_path = os.path.join(path, file_name)
-
-                        self._start_simulation()
+                self._start_simulation()
         progress_logger.info('\n\r')
-        # data_root_path = f"../../../data/scenarios/vrpdp"
-        #
-        # for path, dirs, files in os.walk(os.path.abspath(data_root_path)):
-        #     for problem_type in [PROBLEM_TYPES[2], PROBLEM_TYPES[3]]:
-        #         self.problem_type = problem_type
-        #
-        #         for solver_type in SOLVER_TYPES:
-        #             self.solver_type = solver_type
-        #
-        #             for file_name in files:
-        #                 self.scenario_path = file_name
-        #
-        #                 self._start_simulation()
-        # progress_logger.info('\n\r')
         logging.disable(logging.NOTSET)
 
     def _save_history(self, solver: ISolver):
@@ -186,6 +170,14 @@ class SimulatorGUI:
         if not os.path.exists(file_path):
             os.mkdir(file_path)
         file_path = os.path.join(file_path, file_name)
+
+        if os.path.exists(file_path):
+            with open(file_path) as file:
+                file_data = json.load(file)
+                # no improvement -> don't overwrite it
+                if file_data['value'] < result['value']:
+                    return
+
         with open(file_path, 'w') as file:
             serialized = json.dumps(result, indent=4, cls=JSONSerializer)
             file.write(serialized)
@@ -225,11 +217,19 @@ class SimulatorGUI:
         with open(path) as f:
             data = json.load(f)
 
-        graph = Graph.from_json(data['graph'])
-        if self._is_uturn():
-            return UTurnGraph(UTurnTransitionFunction(graph), graph)
+        graph_path = data['graph']
+        if graph_path in self.loaded_graphs:
+            graph = self.loaded_graphs[graph_path]
         else:
+            with open(f"../../../data/graphs/{data['graph']}") as graph_file:
+                graph = Graph.from_json(json.load(graph_file))
+                graph = UTurnGraph(UTurnTransitionFunction(graph), graph)
+                self.loaded_graphs[graph_path] = graph
+
+        if self._is_uturn():
             return graph
+        else:
+            return graph.base_graph
 
     def _create_run_frame(self, root):
         frame = ttk.Frame(master=root, relief=tk.RAISED, borderwidth=1)
@@ -499,16 +499,16 @@ class SimulatorGUI:
 
     def _create_or_tools_solver(self, graph) -> ISolver:
         if self.problem_type == PROBLEM_TYPES[0]:
-            return SolverCVRP(NodeDistanceAStar(), graph, False, self.or_settings)
+            return SolverCVRP(NodeDistanceAStar(distances=graph.distances), graph, False, self.or_settings)
 
         if self.problem_type == PROBLEM_TYPES[1]:
-            return SolverCVRPU(NodeDistanceAStar(), graph, self.or_settings)
+            return SolverCVRPU(NodeDistanceAStar(distances=graph.distances), graph, self.or_settings)
 
         if self.problem_type == PROBLEM_TYPES[2]:
-            return SolverVRPDP(NodeDistanceAStar(), graph, False, self.or_settings)
+            return SolverVRPDP(NodeDistanceAStar(distances=graph.distances), graph, False, self.or_settings)
 
         if self.problem_type == PROBLEM_TYPES[3]:
-            return SolverVRPDPU(NodeDistanceAStar(), graph, self.or_settings)
+            return SolverVRPDPU(NodeDistanceAStar(distances=graph.distances), graph, self.or_settings)
 
     def _create_ga_solver(self, graph) -> ISolver:
         pop_size = self.ga_settings['population_size']
@@ -517,41 +517,49 @@ class SimulatorGUI:
         mutate_prob = self.ga_settings['mutate_prob']
 
         if self.problem_type == PROBLEM_TYPES[0]:
-            return GASolverCVRP(NodeDistanceAStar(), graph=graph, population_size=pop_size, generations=generations,
+            return GASolverCVRP(NodeDistanceAStar(distances=graph.distances), graph=graph, population_size=pop_size,
+                                generations=generations,
                                 mutate_prob=crossover_prob,
                                 crossover_prob=mutate_prob)
 
         if self.problem_type == PROBLEM_TYPES[1]:
-            return GASolverCVRPU(NodeDistanceAStar(), graph=graph, population_size=pop_size, generations=generations,
+            return GASolverCVRPU(NodeDistanceAStar(distances=graph.distances), graph=graph, population_size=pop_size,
+                                 generations=generations,
                                  mutate_prob=crossover_prob,
                                  crossover_prob=mutate_prob)
 
         if self.problem_type == PROBLEM_TYPES[2]:
-            return GASolverVRPDP(NodeDistanceAStar(), graph=graph, population_size=pop_size, generations=generations,
+            return GASolverVRPDP(NodeDistanceAStar(distances=graph.distances), graph=graph, population_size=pop_size,
+                                 generations=generations,
                                  mutate_prob=crossover_prob,
                                  crossover_prob=mutate_prob)
 
         if self.problem_type == PROBLEM_TYPES[3]:
-            return GASolverVRPDPU(NodeDistanceAStar(), graph=graph, population_size=pop_size, generations=generations,
+            return GASolverVRPDPU(NodeDistanceAStar(distances=graph.distances), graph=graph, population_size=pop_size,
+                                  generations=generations,
                                   mutate_prob=crossover_prob,
                                   crossover_prob=mutate_prob)
 
     def _create_local_solver(self, graph):
         if self.problem_type == PROBLEM_TYPES[0]:
             return LocalSolver(CyclicNeighborhoodGeneratorCVRP(), DistanceObjective(),
-                               InitSolverCVRP(NodeDistanceAStar(), graph), self._local_solver_settings['greedy'])
+                               InitSolverCVRP(NodeDistanceAStar(distances=graph.distances), graph),
+                               self._local_solver_settings['greedy'])
 
         if self.problem_type == PROBLEM_TYPES[1]:
             return LocalSolver(CyclicNeighborhoodGeneratorCVRP(), DistanceObjective(),
-                               InitSolverCVRPU(NodeDistanceAStar(), graph), self._local_solver_settings['greedy'])
+                               InitSolverCVRPU(NodeDistanceAStar(distances=graph.distances), graph),
+                               self._local_solver_settings['greedy'])
 
         if self.problem_type == PROBLEM_TYPES[2]:
             return LocalSolver(CyclicNeighborhoodGeneratorVRPDP(), DistanceObjective(),
-                               InitSolverVRPDP(NodeDistanceAStar(), graph), self._local_solver_settings['greedy'])
+                               InitSolverVRPDP(NodeDistanceAStar(distances=graph.distances), graph),
+                               self._local_solver_settings['greedy'])
 
         if self.problem_type == PROBLEM_TYPES[3]:
             return LocalSolver(CyclicNeighborhoodGeneratorVRPDP(), DistanceObjective(),
-                               InitSolverVRPDPU(NodeDistanceAStar(), graph), self._local_solver_settings['greedy'])
+                               InitSolverVRPDPU(NodeDistanceAStar(distances=graph.distances), graph),
+                               self._local_solver_settings['greedy'])
 
 
 if __name__ == '__main__':

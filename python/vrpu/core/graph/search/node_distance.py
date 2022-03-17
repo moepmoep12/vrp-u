@@ -1,23 +1,15 @@
 import sys
-from dataclasses import dataclass
+import logging
 from typing import Callable, List, Generic, Collection
 from overrides import overrides
 
 from vrpu.core.graph.node import Node, UID, NodeData, EdgeData
-from vrpu.core.graph.graph import Graph
+from vrpu.core.graph.graph import Graph, Distance
 from vrpu.core.graph.search import astar, dijkstra
 
-
-@dataclass
-class Distance:
-    from_node: UID = ''
-    to_node: UID = ''
-    distance: int = 0
-    path: List = None
-    reachable: bool = True
-
-
 MAX_DISTANCE = (sys.maxsize / 100000)
+
+progress_logger = logging.getLogger('progress')
 
 
 class INodeDistance(object):
@@ -84,18 +76,23 @@ class NodeDistanceAStar(CachedNodeDistance, Generic[NodeData, EdgeData]):
     Pre-calculates the node distances for a graph with A* and caches the results.
     """
 
-    def __init__(self, heuristic_generator: HeuristicGenerator = ZeroHeuristicGenerator()):
+    def __init__(self, heuristic_generator: HeuristicGenerator = ZeroHeuristicGenerator(), distances=dict()):
         """
         :param heuristic_generator: Optional. Generates a heuristic function for the distance to the goal.
         """
-        super().__init__(dict())
+        super().__init__(distances)
         self._heuristic_generator = heuristic_generator
 
     def calculate_distances(self, graph: Graph[NodeData, EdgeData], node_subset: List[UID] = []):
         nodes = node_subset if node_subset else graph.nodes.keys()
-        for start_node_uid in nodes:
-            self._distances[start_node_uid] = dict()
+        for i, start_node_uid in enumerate(nodes):
+            progress_logger.debug(f"\rCalculating node distances {i + 1}/{len(nodes)}")
+            if start_node_uid not in self._distances:
+                self._distances[start_node_uid] = dict()
             for end_node_uid in nodes:
+                if end_node_uid in self._distances[start_node_uid]:
+                    continue
+
                 def goal_test(node: Node[NodeData, EdgeData]):
                     return node.uid == end_node_uid
 
@@ -107,6 +104,8 @@ class NodeDistanceAStar(CachedNodeDistance, Generic[NodeData, EdgeData]):
                                                                          distance=distance,
                                                                          path=result.path if result else [],
                                                                          reachable=distance != MAX_DISTANCE)
+        progress_logger.debug("\n\r")
+        progress_logger.debug(f"Finished calculating node distances!")
 
     @overrides
     def get_distance(self, from_node: UID, to_node: UID) -> int:
@@ -131,7 +130,7 @@ class NodeDistanceDijkstra(CachedNodeDistance, Generic[NodeData, EdgeData]):
         nodes = node_subset if node_subset else graph.nodes.keys()
 
         for i, start_node_uid in enumerate(nodes):
-            print(f"\rCalculating node distances {i + 1}/{len(nodes)}", end='')
+            progress_logger.debug(f"\rCalculating node distances {i + 1}/{len(nodes)}")
             start_node = graph.get_node(start_node_uid)
             search_results = dijkstra.search(start_node, graph)
             relevant_results = [n for n in search_results if n.end_node.uid in nodes]
@@ -141,7 +140,8 @@ class NodeDistanceDijkstra(CachedNodeDistance, Generic[NodeData, EdgeData]):
                                                                         path=[],
                                                                         reachable=r.reachable)
                                                for r in relevant_results}
-        print(f"\nFinished calculating node distances!")
+        progress_logger.debug("\n\r")
+        progress_logger.debug(f"Finished calculating node distances!\n\r")
 
     @overrides
     def get_distance(self, from_node: UID, to_node: UID) -> int:

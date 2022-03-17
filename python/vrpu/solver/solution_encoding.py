@@ -171,7 +171,11 @@ class EncodedSolution(list, Solution):
         load = 0
         max_load = 0
 
-        for action in actions:
+        for action_list in actions:
+            if isinstance(action_list, list):
+                action = action_list[0]
+            else:
+                action = action_list
             if isinstance(action, PickUp):
                 load += 1
                 if load > max_load:
