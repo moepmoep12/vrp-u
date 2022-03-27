@@ -48,6 +48,7 @@ class SolverCVRP(ISolver):
         self._open_vrp = open_vrp
         self._solver_params = solver_params
         self._history: [SolvingSnapshot] = []
+        self._collector = None
 
     @overrides
     def solve(self, problem: VRPProblem) -> Solution:
@@ -92,8 +93,17 @@ class SolverCVRP(ISolver):
 
         setup_time = timedelta(seconds=timer() - start_timer)
 
+        self._routing_model.CloseModel()
+
+        self._collector = self._routing_model.solver().AllSolutionCollector()
+        self._collector.AddObjective(self._routing_model.CostVar())
+        for end_index in end_indices:
+            distance_var = self._routing_model.GetDimensionOrDie(DISTANCE_DIM).CumulVar(end_index)
+            self._collector.Add(distance_var)
+        self._routing_model.AddSearchMonitor(self._collector)
+
         # Start solving
-        self._assignment = self._routing_model.SolveWithParameters(search_parameters)
+        self._assignment = self._routing_model.SolveWithParameters(search_parameters=search_parameters)
 
         if not self._assignment:
             logging.debug("Failed to solve...")
@@ -102,16 +112,24 @@ class SolverCVRP(ISolver):
         self._solution = self._create_solution()
 
         runtime = timedelta(seconds=timer() - start_timer) - setup_time
-        value = sum([t.get_distance() for t in self._solution.tours])
-        self._history.append(SolvingSnapshot(
-            runtime=runtime,
-            setup_time=setup_time,
-            step=1,
-            best_value=value,
-            average=value,
-            min_value=value,
-            max_value=value
-        ))
+
+        for i in range(self._collector.SolutionCount()):
+            solution = self._collector.Solution(i)
+            total_distance = 0
+            for end_index in end_indices:
+                distance_var = self._routing_model.GetDimensionOrDie(DISTANCE_DIM).CumulVar(end_index)
+                value = solution.Value(distance_var)
+                total_distance += value
+
+            self._history.append(SolvingSnapshot(
+                runtime=runtime,
+                setup_time=setup_time,
+                step=i + 1,
+                best_value=total_distance,
+                average=total_distance,
+                min_value=total_distance,
+                max_value=total_distance
+            ))
 
         logging.debug(
             f"Found solution with objective value {self.assignment.ObjectiveValue()} after {timer() - start_timer}s")
@@ -166,6 +184,10 @@ class SolverCVRP(ISolver):
         :return: The index of the corresponding action w.r.t. the solver
         """
         return self._index_manager.NodeToIndex(action_index)
+
+    def _solution_callback(self, **args):
+        solver = self._routing_model.solver()
+        pass
 
     def _create_actions(self):
         """

@@ -107,7 +107,7 @@ class ProblemCreatorGUI:
         def on_show_graph():
             if not self.chosen_graph:
                 return
-            GraphRenderer().render_graph(self.chosen_graph)
+            GraphRenderer().render_graph(self.chosen_graph, show_edge_weights=True)
 
         btn_show_graph = Button(master=graph_frame, text="Show graph", relief=RAISED,
                                 command=on_show_graph)
@@ -147,7 +147,7 @@ class ProblemCreatorGUI:
                 'depot': self.depot.get(),
                 'vehicle_count': self.vehicle_count.get(),
                 'max_capacity': self.max_capacity.get(),
-                'graph': graph_data,
+                'graph': f"{graph_name}.json",
                 'requests': self.created_trqs
             }
 

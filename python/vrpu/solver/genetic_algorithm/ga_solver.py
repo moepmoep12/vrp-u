@@ -26,8 +26,8 @@ progress_logger = logging.getLogger('progress')
 
 class GASolverCVRP(ISolver):
 
-    def __init__(self, node_distance: CachedNodeDistance, graph, population_size: int = 10,
-                 generations: int = 10, crossover_prob: float = 0.7, mutate_prob: float = 0.03):
+    def __init__(self, node_distance: CachedNodeDistance, graph, population_size: int = 500,
+                 generations: int = 200, crossover_prob: float = 0.7, mutate_prob: float = 0.03, parent_count: int = 0):
         self.population_size = population_size
         self.generations = generations
         self.crossover_prob = crossover_prob
@@ -38,6 +38,7 @@ class GASolverCVRP(ISolver):
         self._actions = []
         self._history: [SolvingSnapshot] = []
         self._best_individual = None
+        self._parent_count = parent_count
 
     def solve(self, problem: VRPProblem) -> Solution:
         start_timer = timer()
@@ -100,7 +101,8 @@ class GASolverCVRP(ISolver):
         for generation in range(self.generations):
 
             # choose parents for new generation
-            parents = getattr(toolbox, SELECTION_FCT_NAME)(population, len(population))
+            parents = getattr(toolbox, SELECTION_FCT_NAME)(population, len(
+                population) if not self._parent_count else self._parent_count)
 
             # clone
             children = list(map(toolbox.clone, parents))
@@ -124,8 +126,15 @@ class GASolverCVRP(ISolver):
             for ind, fit in zip(invalid_ind, fitnesses):
                 ind.fitness.values = fit
 
-            # The population is entirely replaced by the offspring
-            population[:] = random.sample(children, len(children))
+            # children replace their parents
+            if not self._parent_count:
+                # replace all
+                population = children
+            else:
+                # to-do: only replace parents
+                pass
+
+            random.shuffle(population)
 
             # Output currently best individual
             best_ind = tools.selBest(population, 1)[0]

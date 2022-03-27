@@ -36,6 +36,7 @@ class GraphRenderer(IGraphRenderer):
             :keyword show_trq_id: Whether to show transport request ids at nodes.
             :keyword depot: UID of depot node.
             :keyword depot_color: Color of depot node.
+            :keyword show_edge_weights: Whether edge weights are shown.
         """
         trqs: [TransportRequest] = kwargs.get('trqs', [])
         node_color: str = kwargs.get('node_color', 'tab:blue')
@@ -45,6 +46,7 @@ class GraphRenderer(IGraphRenderer):
         show_trq_id: bool = kwargs.get('show_trq_id', True)
         depot: str = kwargs.get('depot', '')
         depot_color: str = kwargs.get('depot_color', 'gold')
+        show_edge_weights: bool = kwargs.get('show_edge_weights', False)
 
         g = nx.DiGraph()
 
@@ -80,7 +82,7 @@ class GraphRenderer(IGraphRenderer):
         pos = nx.get_node_attributes(g, 'pos')
         pos_adj = {}
         for uid, (x, y) in pos.items():
-            pos_adj[uid] = (x + 2, y - 2)
+            pos_adj[uid] = (x + 4, y - 6)
 
         if show_trq_id:
             nx.draw_networkx_labels(G=g, pos=pos_adj,
@@ -89,6 +91,10 @@ class GraphRenderer(IGraphRenderer):
                                     font_weight="bold",
                                     verticalalignment='top',
                                     horizontalalignment="left")
+
+        if show_edge_weights:
+            weights = nx.get_edge_attributes(g, 'weight')
+            nx.draw_networkx_edge_labels(g, pos, edge_labels=weights)
 
         manager = plt.get_current_fig_manager()
         manager.window.state('zoomed')
