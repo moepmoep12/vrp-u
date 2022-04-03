@@ -1,4 +1,5 @@
 import json
+import math
 import os
 import re
 import tkinter as tk
@@ -7,6 +8,7 @@ import logging
 import logging.config
 from datetime import datetime, timedelta
 from tkinter import filedialog, ttk
+from multiprocessing import Pool
 
 from ortools.constraint_solver import routing_enums_pb2
 
@@ -95,12 +97,57 @@ class SimulatorGUI:
         self._create_scenario_frame(root)
         self._create_run_frame(root)
 
+    @staticmethod
+    def start_simulation(simulators: []):
+        with open(os.path.join(os.path.dirname(__file__), 'logging.yaml')) as file:
+            config = yaml.safe_load(file)
+            logging.config.dictConfig(config)
+        logger = logging.getLogger('simulator')
+        logging.disable(logging.DEBUG)
+        for simulator in simulators:
+            problem = simulator._load_problem(simulator.scenario_path)
+            graph = simulator._load_graph(simulator.scenario_path)
+            solver = simulator.create_solver_methods[simulator.solver_type](graph)
+
+            if not simulator._result_exists() or not simulator.visualization_settings['save_history']:
+                logger.info(f"Starting {simulator.scenario_path}")
+                solution = solver.solve(problem)
+                logger.info(f"Finished {simulator.scenario_path}")
+            else:
+                logger.info(f"Skipping {simulator.scenario_path}")
+                return
+
+            if simulator.visualization_settings['print_solution']:
+                printer = DataFramePrinter(only_node_actions=True)
+                printer.print_solution(solution)
+
+            if simulator.visualization_settings['save_history']:
+                simulator._save_history(solver)
+
+            if simulator.visualization_settings['visualize']:
+                solution_renderer = SolutionRenderer()
+                solution_renderer.render_solution(solution, graph,
+                                                  show_graph_edges=simulator.visualization_settings['show_edges'])
+
+            if simulator.visualization_settings['show_history']:
+                solver_renderer = SolverRenderer()
+                solver_renderer.render_solver_history(solver.history)
+
+            if simulator.visualization_settings['print_history']:
+                logger.info("Solver history:")
+                for entry in solver.history:
+                    logger.info(f"   {entry}")
+
     def _start_simulation(self):
         problem = self._load_problem(self.scenario_path)
         graph = self._load_graph(self.scenario_path)
         solver = self.create_solver_methods[self.solver_type](graph)
 
-        solution = solver.solve(problem)
+        if not self._result_exists() or not self.visualization_settings['save_history']:
+            solution = solver.solve(problem)
+        else:
+            logger.info(f"Skipping {self.scenario_path}")
+            return
 
         if self.visualization_settings['print_solution']:
             printer = DataFramePrinter(only_node_actions=True)
@@ -132,15 +179,41 @@ class SimulatorGUI:
         else:
             data_root_path += "vrpdp"
 
+        simulators = []
+        pool_size = 4
+
         for path, dirs, files in os.walk(os.path.abspath(data_root_path)):
             for k, file_name in enumerate(files):
                 progress_logger.info(f"\rSolver '{self.solver_type}'  "
                                      f"Problem type '{self.problem_type}'  "
                                      f"File '{file_name}' {k + 1}/{len(files)}")
                 self.scenario_path = os.path.join(path, file_name)
+                if not self._result_exists():
+                    simulator = SimulatorGUI()
+                    simulator.scenario_path = self.scenario_path
+                    simulator.ga_settings = self.ga_settings
+                    simulator.solver_type = self.solver_type
+                    simulator.problem_type = self.problem_type
+                    simulator.visualization_settings = self.visualization_settings
+                    simulators.append(simulator)
 
-                self._start_simulation()
         progress_logger.info('\n\r')
+
+        scenario_per_pool = max(math.floor(len(simulators) / pool_size), 1)
+
+        with Pool(pool_size) as pool:
+            pool_input = [simulators[i * scenario_per_pool: (i * scenario_per_pool) + scenario_per_pool] for i in
+                          range(0, pool_size)]
+            pool.map(SimulatorGUI.start_simulation, pool_input)
+
+        if len(simulators) % pool_size != 0:
+            with Pool(pool_size) as pool:
+                simulators = simulators[pool_size * scenario_per_pool:]
+                scenario_per_pool = max(math.floor(len(simulators) / pool_size), 1)
+                pool_input = [simulators[i * scenario_per_pool: (i * scenario_per_pool) + scenario_per_pool] for i in
+                              range(0, pool_size)]
+                pool.map(SimulatorGUI.start_simulation, pool_input)
+
         logging.disable(logging.NOTSET)
 
     def _save_history(self, solver: ISolver):
@@ -188,6 +261,15 @@ class SimulatorGUI:
 
     def _is_uturn(self) -> bool:
         return self.problem_type == PROBLEM_TYPES[1] or self.problem_type == PROBLEM_TYPES[3]
+
+    def _result_exists(self) -> bool:
+        scenario_name = os.path.basename(self.scenario_path)
+        re_result = re.search(r"(.*)(\.json)", scenario_name)
+        scenario_name = re_result.group(1)
+        file_path = f"../../../data/results/{self.solver_type}/{self.problem_type}/"
+        file_name = f"result_{scenario_name}.json"
+        file_path = os.path.join(file_path, file_name)
+        return os.path.exists(file_path)
 
     def _load_problem(self, path):
         vehicles = []

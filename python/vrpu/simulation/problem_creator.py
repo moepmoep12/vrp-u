@@ -235,7 +235,26 @@ class ProblemCreatorGUI:
             label_path_chosen['text'] = filename
             self.chosen_graph_path = filename
             with open(filename) as f:
-                self.created_graph = Graph.from_json(json.load(f))
+                graph_data = json.load(f)
+                self.created_graph = Graph.from_json(graph_data)
+
+                pattern = re.compile(r"\d+x\d+")
+                result = pattern.search(self.chosen_graph_path)
+                graph_name = result.group(0)
+
+                normal_distances = 0
+                u_distances = 0
+
+                for key, distance_list in graph_data['distances'].items():
+                    if '->' in key:
+                        u_distances += len(distance_list)
+                    else:
+                        normal_distances += len(distance_list)
+
+                print(f"Loaded graph {graph_name} with {len(self.created_graph.nodes)} nodes,"
+                      f" {len(self.created_graph.edges)} edges,"
+                      f" {normal_distances} distances, "
+                      f" {u_distances} u-distances")
 
         btn_choose = Button(master=graph_frame, text="Choose graph", relief=RAISED,
                             command=on_choose_graph_clicked)
