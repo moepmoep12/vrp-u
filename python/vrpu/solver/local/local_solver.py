@@ -157,7 +157,7 @@ class InitSolverVRPDP(InitSolverCVRP):
         # gather all actions (indices) that are not yet inserted
         actions_to_test = [(i, i + 1) for i in range(0, len(actions_inserted) - 1, 2) if not actions_inserted[i]]
         if len(actions_to_test) > max_actions_to_test:
-            actions_to_test = random.sample(max_actions_to_test)
+            actions_to_test = random.sample(actions_to_test, max_actions_to_test)
 
         # go through all actions not already inserted
         for p_idx, d_idx in actions_to_test:
@@ -312,93 +312,6 @@ class InitSolverVRPDPU(InitSolverCVRPU):
                  for node_state in self._get_possible_state_nodes(trq.to_node)])
 
         return actions
-
-    def _choose_actions_to_insert(self, actions_inserted: [bool], vehicle_index: int) -> [Tuple[int, int]]:
-        best_distances = []
-
-        @dataclass
-        class PDDistance:
-            pickup_index: int
-            delivery_index: int
-            value_pickup: int
-            value_delivery: int
-            distance: Number
-            solution: EncodedSolution
-
-        # go through all actions not already inserted
-        for i in range(0, len(actions_inserted) - 1, 2):
-            if actions_inserted[i]:
-                continue
-
-            pd_distance = PDDistance(i, i + 1, 0, 10, sys.maxsize, None)
-            best_distances.append(pd_distance)
-
-            # gather all possible values for the pickup action
-            possible_values = [e.value for e in self._current_solution if
-                               e is not None and e.vehicle_index == vehicle_index]
-            if len(possible_values) > 0:
-                # allows insertion at tour end
-                possible_values.append(max(possible_values) + 1)
-            else:
-                possible_values.append(1)
-
-            # go through all possible values (positions) for the pickup action
-            for pick_value in possible_values:
-                clone_p = self._current_solution.clone()
-                # simulate the pickup action being in the tour
-                clone_p[i] = EncodedAction(vehicle_index, pick_value)
-
-                # order is disturbed by insertion of the pickup action -> restore it
-                for j, encoded_action in enumerate(clone_p):
-                    if j == i:
-                        continue
-                    if encoded_action is None:
-                        continue
-                    if encoded_action.value >= pick_value:
-                        encoded_action.value += 1
-
-                # gather possible values for delivery action
-                possible_values = [e.value for e in clone_p if
-                                   e is not None and e.vehicle_index == vehicle_index and e.value > pick_value]
-                if len(possible_values) > 0:
-                    # allows insertion at tour end
-                    possible_values.append(max(possible_values) + 1)
-                else:
-                    possible_values.append(2)
-
-                # go through all possible positions for the delivery (that is after the pickup)
-                for delivery_value in possible_values:
-                    clone_d = clone_p.clone()
-                    # simulate the delivery being in the tour, too
-                    clone_d[i + 1] = EncodedAction(vehicle_index, delivery_value)
-
-                    # order is disturbed by insertion of the pickup action -> restore it
-                    for j, encoded_action in enumerate(clone_d):
-                        if j == i + 1:
-                            continue
-                        if encoded_action is None:
-                            continue
-                        if encoded_action.value >= delivery_value:
-                            encoded_action.value += 1
-
-                    # check capacity
-                    max_loads = clone_d.get_max_loads()
-                    if max_loads[vehicle_index] > self._current_problem.vehicles[vehicle_index].max_capacity:
-                        continue
-
-                    distance = sum(t.get_distance() for t in clone_d.tours)
-                    if distance < pd_distance.distance:
-                        pd_distance.distance = distance
-                        pd_distance.value_pickup = pick_value
-                        pd_distance.value_delivery = delivery_value
-                        pd_distance.solution = clone_d
-
-        best_distances = sorted(best_distances, key=lambda pd: pd.distance)
-        best_pd = best_distances[0]
-        for orig, changed in zip(self._current_solution, best_pd.solution):
-            if orig is not None and changed is not None:
-                orig.value = changed.value
-        return [(best_pd.pickup_index, best_pd.value_pickup), (best_pd.delivery_index, best_pd.value_delivery)]
 
 
 class LocalSolver(ISolver):

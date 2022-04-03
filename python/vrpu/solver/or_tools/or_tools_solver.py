@@ -25,7 +25,7 @@ TIME_WEIGHT: int = 100
 DISTANCE_WEIGHT: int = 100
 
 # SOLVER SETTINGS
-MAX_RUN_TIME: int = 300
+MAX_RUN_TIME: int = 9 * 60
 
 
 @dataclass
