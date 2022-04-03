@@ -1,5 +1,6 @@
 import random
 import logging
+import sys
 from datetime import timedelta
 from operator import itemgetter
 from typing import List, Tuple, Dict
@@ -23,13 +24,16 @@ MUTATE_FCT_NAME = 'Mutate'
 
 progress_logger = logging.getLogger('progress')
 
+# Max runtime in seconds
+MAX_TIME = 9 * 60
+
 
 class GASolverCVRP(ISolver):
 
-    def __init__(self, node_distance: CachedNodeDistance, graph, population_size: int = 500,
-                 generations: int = 200, crossover_prob: float = 0.7, mutate_prob: float = 0.03, parent_count: int = 0):
+    def __init__(self, node_distance: CachedNodeDistance, graph, population_size: int = 300,
+                 generations: int = 500, crossover_prob: float = 0.7, mutate_prob: float = 0.03, parent_count: int = 0):
         self.population_size = population_size
-        self.generations = generations
+        self.generations = generations if generations != 0 else sys.maxsize
         self.crossover_prob = crossover_prob
         self.mutate_prob = mutate_prob
         self._node_distance: CachedNodeDistance = node_distance
@@ -140,13 +144,14 @@ class GASolverCVRP(ISolver):
             best_ind = tools.selBest(population, 1)[0]
             if best_ind.fitness.values[0] > self._best_individual.fitness.values[0]:
                 self._best_individual = best_ind
-            progress_logger.debug(f"Generation {generation + 1}/{self.generations}"
+            progress_logger.debug(f"\r Generation {generation + 1}/{self.generations}"
                                   f"   Best Fitness: {best_ind.fitness.values}")
 
             # Keep track of stats
             values = [ind.fitness.values[1] for ind in population]
+            runtime = timedelta(seconds=timer() - start_timer) - setup_time
             self._history.append(
-                SolvingSnapshot(runtime=timedelta(seconds=timer() - start_timer) - setup_time,
+                SolvingSnapshot(runtime=runtime,
                                 setup_time=setup_time,
                                 step=generation + 1,
                                 best_value=best_ind.fitness.values[1],
@@ -154,6 +159,11 @@ class GASolverCVRP(ISolver):
                                 min_value=min(values),
                                 max_value=max(values)))
 
+            # max time reached
+            if runtime.total_seconds() >= MAX_TIME and self.generations == sys.maxsize:
+                break
+
+        progress_logger.debug("\n\r")
         logging.debug(f"-- End of (successful) evolution after {timer() - start_timer}s --")
 
         return self._individual_to_solution(self._best_individual)
