@@ -185,10 +185,6 @@ class SolverCVRP(ISolver):
         """
         return self._index_manager.NodeToIndex(action_index)
 
-    def _solution_callback(self, **args):
-        solver = self._routing_model.solver()
-        pass
-
     def _create_actions(self):
         """
         :return: All actions for the current problem.
@@ -549,11 +545,9 @@ class SolverVRPDPU(SolverVRPDP):
             delivery_locations = self._get_possible_state_nodes(trq.to_node)
 
             for i, p_loc in enumerate(pickup_locations):
-                for j, d_loc in enumerate(delivery_locations):
-                    idx = f"{i}{j}"
-                    pickup_actions.append(PickUpUTurnState(trq=trq, idx=idx, node=p_loc, duration=pick_duration))
-                    delivery_actions.append(
-                        DeliveryUTurnState(trq=trq, idx=idx, node=d_loc, duration=delivery_duration))
+                pickup_actions.append(PickUpUTurnState(trq=trq, idx=0, node=p_loc, duration=pick_duration))
+            for j, d_loc in enumerate(delivery_locations):
+                delivery_actions.append(DeliveryUTurnState(trq=trq, idx=0, node=d_loc, duration=delivery_duration))
 
         start_actions = [SetupAction(start_node=self._get_start_node_for_vehicle(v), duration=setup_duration)
                          for v in self._vehicles]
@@ -564,30 +558,26 @@ class SolverVRPDPU(SolverVRPDP):
     @overrides
     def _add_actions(self):
         time_dimension = self._routing_model.GetDimensionOrDie(TIME_DIM)
+        penalty = int(MAX_TOUR_DISTANCE) * len(self.vehicles) * DISTANCE_WEIGHT
 
         for trq in self._current_problem.transport_requests:
-            added_indices = []
+            pickup_actions = [self.action_index_to_solver_index(i) for i in
+                              range(len(self._actions)) if isinstance(self._actions[i], PickUp) and
+                              self._actions[i].trqID == trq.uid]
+            delivery_actions = [self.action_index_to_solver_index(i) for i in
+                                range(len(self._actions)) if isinstance(self._actions[i], Delivery) and
+                                self._actions[i].trqID == trq.uid]
 
-            for i, p in enumerate(self._actions):
-                if not isinstance(p, PickUp) or not p.trqID == trq.uid:
-                    continue
+            pickup_disjunction_indices = self._routing_model.AddDisjunction([p for p in pickup_actions], penalty, 1)
+            delivery_disjunction_indices = self._routing_model.AddDisjunction([d for d in delivery_actions], penalty, 1)
 
-                for j, d in enumerate(self._actions):
-                    if isinstance(d, Delivery) and d.trqID == trq.uid and d.idx == p.idx:
-                        p_idx = self.action_index_to_solver_index(i)
-                        d_idx = self.action_index_to_solver_index(j)
-                        added_indices.append(p_idx)
-                        added_indices.append(d_idx)
-                        self._routing_model.AddPickupAndDelivery(p_idx, d_idx)
-                        self._routing_model.solver().Add(
-                            self._routing_model.VehicleVar(p_idx) == self._routing_model.VehicleVar(d_idx)
-                        )
-                        self._routing_model.solver().Add(
-                            time_dimension.CumulVar(p_idx) <=
-                            time_dimension.CumulVar(d_idx))
-            penalty = int(MAX_TOUR_DISTANCE) * len(self.vehicles) * DISTANCE_WEIGHT
+            self._routing_model.AddPickupAndDeliverySets(pickup_disjunction_indices, delivery_disjunction_indices)
 
-            self._routing_model.AddDisjunction(added_indices, penalty, 2)
+            for p in pickup_actions:
+                for d in delivery_actions:
+                    self._routing_model.solver().Add(
+                        time_dimension.CumulVar(p) <=
+                        time_dimension.CumulVar(d))
 
     def _get_start_node_for_vehicle(self, vehicle: Vehicle):
         if vehicle.node_arriving_from:
