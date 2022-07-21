@@ -1,4 +1,8 @@
-pytest
-overrides
-pandas
-pyyaml
+deap >= 1.3.1
+matplotlib >= 3.5.1
+networkx >= 2.6.3
+pytest >= 6.2.5
+overrides >= 6.1.0
+pandas >= 1.3.5
+pyyaml >= 6.0
+ortools >= 9.2.9972
